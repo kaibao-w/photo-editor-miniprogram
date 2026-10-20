@@ -1,17 +1,20 @@
+const savedPresets=require('../../utils/presets');
 const config = require('../../utils/config');
 const { grade, composeFrame } = require('../../utils/image');
 const History = require('../../utils/history');
 const { bounds, zoomAt, exportSize } = require('../../utils/view');
 const call = (name, args = {}) => new Promise((resolve, reject) => wx[name]({ ...args, success: resolve, fail: reject }));
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
-const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step }));
+const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',saturation:'◉',temperature:'◑',tint:'◈'};
+const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 Page({
   data: {
-    ready: false, busy: false, tab: 'adjust', tabs: [{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
+    savedPresets:[],selectedPresetId:'',presetScrollTarget:'',cloudStatus:'',syncing:false,
+    ready: false, busy: false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
-    viewOptions: ['缩小', '放大', '铺满宽度', '查看全图'], formats: ['JPG', 'PNG'], formatIndex: 0, sizes: ['高清 · 长边2048', '原尺寸 · 超大图自动限制'], sizeIndex: 1,
-    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调夜景'},{key:'warm',label:'暖色'}], preset: '',
+    formats: ['JPG', 'PNG'], formatIndex: 0,
+    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'}], preset: '',
     label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%', status: '图片仅在设备本地处理',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
   },
@@ -20,6 +23,7 @@ Page({
     this._alive = true; this._privacyHandler = resolve => { this._privacyResolve = resolve; this.setData({privacyVisible:true}); };
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
+  onShow(){this.refreshPresets();this.syncPresets();},
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this._alive = false; clearTimeout(this._timer);
@@ -28,6 +32,7 @@ Page({
     for(const canvas of [this.canvas, this.exportCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
     this.source = this.image = null;
   },
+  onHide(){this.compareEnd();},
   onResize() { if(this.canvas) this.measure(); },
   createCanvas(width, height) { return wx.createOffscreenCanvas({type:'2d',width,height}); },
   async initialize() {
@@ -40,8 +45,9 @@ Page({
   },
   measure() {
     const info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
-    // Leave at least 230 px for the compact editing dock on smaller phones.
-    const stageHeight = Math.max(150, Math.min(info.windowHeight*.62, info.windowHeight-280));
+    // Reserve the complete editing panel and one bottom safe area before sizing the preview.
+    const safeBottom = info.safeArea ? Math.max(0, info.screenHeight - info.safeArea.bottom) : 0;
+    const stageHeight = Math.max(44, Math.min(info.windowHeight*.62, info.windowHeight-52-240-safeBottom));
     return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('.preview-surface').boundingClientRect(rect => {
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
@@ -52,8 +58,10 @@ Page({
     const frameMode=this.data.tab==='frame'; const key=frameMode?this.data.frameSelected:this.data.selected;
     const def=(frameMode?this.data.frameList:this.data.adjustList).find(d=>d.key===key);
     const value=(frameMode?this.frame:this.values)[key];
-    this.setData({values:{...this.values},frame:{...this.frame}, label:def.label, parameterValue:value,
-      percent:(value-def.min)/(def.max-def.min)*100, preset:Object.keys(config.presets).find(k=>JSON.stringify({...config.defaults(),...config.presets[k]})===JSON.stringify(this.values)) || ''});
+    const selectedPreset=this.data.savedPresets.find(r=>r.id===this.data.selectedPresetId);
+    const matches=selectedPreset && Object.keys(selectedPreset.values).every(k=>selectedPreset.values[k]===this.values[k]) && (!selectedPreset.frame || Object.keys(selectedPreset.frame).every(k=>selectedPreset.frame[k]===this.frame[k]));
+    this.setData({selectedPresetId:matches?selectedPreset.id:'',values:{...this.values},frame:{...this.frame}, label:def.label, parameterValue:value,
+      percent:(value-def.min)/(def.max-def.min)*100, preset:matches?'':Object.keys(config.presets).find(k=>JSON.stringify({...config.defaults(),...config.presets[k]})===JSON.stringify(this.values)) || ''});
   },
   syncHistory() {
     if(!this.history) return;
@@ -76,13 +84,24 @@ Page({
       const scratch=this.createCanvas(pw,ph),c=scratch.getContext('2d');c.drawImage(image,0,0,pw,ph);
       const pixels=c.getImageData(0,0,pw,ph);scratch.width=scratch.height=1;
       this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;
-      this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
-      this.setData({ready:true,comparing:false,tab:'adjust',status:`${w} × ${h} · 本地处理`});
+      this.initializePhotoEdits();
+      if(this.pendingPreset){const row=this.pendingPreset;this.pendingPreset=null;this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.setData({selectedPresetId:row.id});this.history.record(this.state(),'预设 · '+row.name);}
+      this.setData({ready:true,comparing:false,tab:'presets',status:`${w} × ${h} · 本地处理`});
       this.sync();this.syncHistory();this.render();this.fitView();
     } catch(error) {if(!String(error.errMsg||'').includes('cancel')) this.error(error,error.message || '无法读取图片，请尝试 JPG 或 PNG');}
     finally {if(this._alive)this.setData({busy:false});}
   },
-  schedule() {clearTimeout(this._timer);this._timer=setTimeout(()=>{if(this._alive)this.render();},35);},
+  initializePhotoEdits(){
+    this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
+    this.values={...config.defaults(),...config.presets.night};
+    this.frame={...config.frameDefaults,caption:'冷调'};
+    this.history.record(this.state(),'预设 · 冷调');
+  },
+  schedule() {
+    // Coalesce updates without postponing the pending preview during continuous dragging.
+    if(this._timer != null || !this._alive)return;
+    this._timer=setTimeout(()=>{this._timer=null;if(this._alive)this.render();},16);
+  },
   render() {
     if(!this.source || !this._alive) return;
     try {
@@ -102,14 +121,13 @@ Page({
     this.setData({zoomLabel:Math.round(this.view.zoom*100)+'%'});
   },
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
-  fillView() {this.view={zoom:1,x:0,y:0};this.drawView();},
-  zoomIn(){this.view=zoomAt(this.view,this.view.zoom*1.25,0,0);this.drawView();},
-  zoomOut(){this.view=zoomAt(this.view,this.view.zoom/1.25,0,0);this.drawView();},
-  compare(){if(this.data.busy)return;this.setData({comparing:!this.data.comparing});this.render();},
+  compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
+  compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
   switchTab(e){this.setData({tab:e.currentTarget.dataset.key});this.sync();},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults};this.edit('重置全部');},
-  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key;this.values={...config.defaults(),...config.presets[key]};this.edit('预设 · '+this.data.presets.find(p=>p.key===key).label);},
+  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:preset.label};this.edit('预设 · '+preset.label);},
+  toggleFrameCheckbox(e){this.toggleFrame({detail:{value:e.detail.value.includes('enabled')}});},
   toggleFrame(e){if(!this.source || this.data.busy)return;this.frame.enabled=e.detail.value;this.edit(this.frame.enabled?'启用画框':'关闭画框');},
   captionInput(e){if(!this.source || this.data.busy)return;this.frame.caption=e.detail.value;this.edit();},
   captionBlur(){this.commit('画框 · 底部文字');},
@@ -151,15 +169,12 @@ Page({
     this.tap=null;this.startGesture(e.touches);
   },
   viewCancel(){this.tap=this.lastTap=this.gesture=null;},
-  changeView(e){if(!this.source || this.data.busy)return;const action=['zoomOut','zoomIn','fillView','fitView'][Number(e.detail.value)];if(action)this[action]();},
   changeFormat(e){this.setData({formatIndex:Number(e.detail.value)});},
-  changeSize(e){this.setData({sizeIndex:Number(e.detail.value)});},
   async exportPhoto(){
     if(!this.source || this.data.busy)return;this.captionBlur();this.setData({busy:true});
-    const state=this.state(),type=this.data.formatIndex?'png':'jpg',original=this.data.sizeIndex===1;
-    const size=exportSize(this.originalWidth,this.originalHeight,original);let photo;
+    const state=this.state(),type=this.data.formatIndex?'png':'jpg';
+    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo;
     try {
-      if(original&&size.reduced){const answer=await call('showModal',{title:'图片较大',content:`为控制手机内存，本次将导出为 ${size.width} × ${size.height} 像素。是否继续？`});if(!answer.confirm)return;}
       wx.showLoading({title:'正在生成图片',mask:true});await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
       if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}pc.drawImage(this.image,0,0,size.width,size.height);
@@ -169,7 +184,7 @@ Page({
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
       wx.hideLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
       this.setData({status:`已生成 ${size.width} × ${size.height} ${type.toUpperCase()}`});
-    }catch(error){this.error(error,'导出失败，请切换“高清”尺寸后重试');}
+    }catch(error){this.error(error,'导出失败，请使用较小的图片重试');}
     finally {wx.hideLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false});}
   },
   async saveToAlbum(path){
@@ -181,6 +196,39 @@ Page({
       wx.previewImage({urls:[path],current:path});
     }
   },
+  refreshPresets(){try{this.setData({savedPresets:savedPresets.read().filter(r=>!r.deleted).sort((a,b)=>b.updatedAt-a.updatedAt)});}catch(e){this.error(e,'读取预设失败');}},
+  async syncPresets(){if(this.data.syncing)return;this.setData({syncing:true});try{await savedPresets.sync();if(this._alive)this.setData({cloudStatus:'已同步到云端'});}catch(e){if(this._alive)this.setData({cloudStatus:e.message||'同步失败，稍后可重试'});}finally{if(this._alive){this.setData({syncing:false});this.refreshPresets();}}},
+  async savePreset(){
+    if(!this.source||this.data.busy)return;
+    const payload={version:1,name:'',values:{...this.values},frame:{...this.frame}};
+    const result=await call('showModal',{title:'保存当前预设',editable:true,placeholderText:'预设名称（最多30字）'});
+    if(!result.confirm)return;payload.name=(result.content||'').trim();
+    try{savedPresets.save(payload);this.refreshPresets();this.syncPresets();wx.showToast({title:'已保存到本机',icon:'success'});}catch(e){this.error(e,e.message);}
+  },
+  applySavedPreset(e){
+    if(!this.source||this.data.busy)return;
+    const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
+    this.setData({selectedPresetId:row.id,presetScrollTarget:'preset-'+row.id});this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.edit('预设 · '+row.name);
+    wx.showToast({title:'已应用，可撤销',icon:'none'});
+  },
+  async importPreset(){try{
+    const result=await call('showModal',{title:'导入预设码',editable:true,placeholderText:'粘贴 GY1: 开头的完整预设码'});if(!result.confirm)return;
+    const row=savedPresets.decode(result.content);
+    const confirm=await call('showModal',{title:row.name,content:'包含调色参数'+(row.frame?'、画框参数':'')+(row.frame&&row.frame.caption!==undefined?'、底部文字':'')+'，是否导入我的预设？'});if(!confirm.confirm)return;
+    const saved=savedPresets.save(row);this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id,presetScrollTarget:'preset-'+saved.id});
+    if(this.source&&!this.data.busy){this.applySavedPreset({currentTarget:{dataset:{id:saved.id}}});}
+    else{this.pendingPreset=saved;wx.showToast({title:'已选中，选图后应用',icon:'none'});}
+    this.syncPresets();
+  }catch(e){this.error(e,e.message||'导入失败');}},
+  async presetMenu(e){try{
+    const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
+    const result=await call('showActionSheet',{itemList:['复制分享码','重命名','用当前参数覆盖','删除']});
+    if(result.tapIndex===0){await call('setClipboardData',{data:savedPresets.encode(row)});return;}
+    if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;savedPresets.save({...row,name:answer.content},row.id);}
+    if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};savedPresets.save(next,row.id);}
+    if(result.tapIndex===3){const answer=await call('showModal',{title:'删除预设',content:'同步后其他设备也将删除，好友已导入的副本不受影响。'});if(!answer.confirm)return;savedPresets.remove(row.id);}
+    this.refreshPresets();this.syncPresets();
+  }catch(e){if(!String(e.errMsg||'').includes('cancel'))this.error(e,e.message||'操作失败');}},
   openPrivacy(){wx.openPrivacyContract({fail:()=>wx.showToast({title:'请先在小程序后台配置隐私指引',icon:'none'})});},
   agreePrivacy(){if(this._privacyResolve)this._privacyResolve({buttonId:'privacyAgree',event:'agree'});this._privacyResolve=null;this.setData({privacyVisible:false});},
   declinePrivacy(){if(this._privacyResolve)this._privacyResolve({event:'disagree'});this._privacyResolve=null;this.setData({privacyVisible:false});}

@@ -1,6 +1,6 @@
 const adjustments=[['exposure','曝光',-2,2,.05,'暗','亮'],['contrast','对比度',-100,100,1,'柔和','强烈'],['dehaze','去灰',0,100,1,'原始','通透'],['highlights','高光',-100,100,1,'压低','提亮'],['shadows','阴影',-100,100,1,'压暗','提亮'],['saturation','饱和度',-100,100,1,'黑白','鲜艳'],['temperature','色温',-100,100,1,'冷','暖'],['tint','色调',-100,100,1,'绿','洋红']];
 const frames=[['size','图片大小',50,95,1],['radius','圆角',0,10,.5],['shadow','阴影',0,100,1],['blur','模糊',0,100,1],['darkness','压暗',0,80,1]];
 const presets={clear:{contrast:12,dehaze:25,saturation:10,highlights:-15,shadows:10},night:{contrast:15,dehaze:30,saturation:12,temperature:-24,tint:8,highlights:-25,shadows:5},warm:{exposure:.1,contrast:6,saturation:8,temperature:25,highlights:-12}};
-const frameDefaults={enabled:true,blur:40,darkness:25,size:83,radius:3,shadow:35,caption:'留言区'};
+const frameDefaults={enabled:true,blur:40,darkness:25,size:83,radius:3,shadow:35,caption:''};
 const defaults=()=>Object.fromEntries(adjustments.map(d=>[d[0],0]));
 module.exports={adjustments,frames,presets,frameDefaults,defaults};
