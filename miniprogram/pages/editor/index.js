@@ -42,7 +42,7 @@ Page({
     const info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
     // Leave at least 230 px for the compact editing dock on smaller phones.
     const stageHeight = Math.max(150, Math.min(info.windowHeight*.62, info.windowHeight-280));
-    return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('#preview').boundingClientRect(rect => {
+    return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('.preview-surface').boundingClientRect(rect => {
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
   },
@@ -57,7 +57,7 @@ Page({
   },
   syncHistory() {
     if(!this.history) return;
-    this.setData({history:this.history.items.map((s,index)=>({index,label:s.label,marked:s.marked,parent:s.parent})),current:this.history.current,
+    this.setData({history:this.history.items.map((s,index)=>({index,label:s.label,marked:s.marked,parent:s.parent})).reverse(),current:this.history.current,
       canUndo:this.history.items[this.history.current].parent!==null,canRedo:!!this.history.redos.length,marked:this.history.items[this.history.current].marked});
   },
   commit(label) {if(this.history){this.history.record(this.state(),label);this.syncHistory();}},

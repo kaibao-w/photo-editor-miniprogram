@@ -7,8 +7,10 @@
     </view>
   </view>
   <view class="stage" style="height:{{stageHeight}}px">
-    <canvas type="2d" id="preview" class="preview" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
+    <view class="preview-surface">
+    <canvas type="2d" id="preview" class="preview {{ready ? '' : 'canvas-idle'}}" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
     <view class="empty" wx:if="{{!ready}}"><view class="empty-title">从一张照片开始</view><text>选择相册图片或拍一张照片</text><button class="primary" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">选择图片</button></view>
+    </view>
     <view class="stage-footer">
       <view class="view-actions">
         <picker range="{{viewOptions}}" bindchange="changeView" disabled="{{!ready || busy}}"><view class="view-picker">视图 ▾</view></picker>
@@ -33,7 +35,7 @@
       <view wx:else class="panel-inner">
         <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 撤回</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 重做</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
         <view wx:if="{{!ready}}" class="status">选图后自动记录调色和画框步骤</view>
-        <view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><text>{{item.index}} · {{item.label}}</text><text class="status">{{item.index===current?'当前':(item.parent===null?'起点':'基于步骤 '+item.parent)}}</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view>
+        <view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><view class="step-copy"><text class="step-title">{{item.label}}</text><text class="step-meta">步骤 {{item.index}} · {{item.parent===null?'起点':'基于步骤 '+item.parent}}</text></view><text wx:if="{{item.index===current}}" class="current-badge">当前</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view>
         <view class="status">返回后继续调整会保留旧记录。换图或关闭页面会清空步骤。</view>
       </view>
     </scroll-view>
