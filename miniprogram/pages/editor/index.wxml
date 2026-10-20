@@ -1,0 +1,43 @@
+<view class="workspace">
+  <view class="toolbar">
+    <button bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">＋ 选图</button>
+    <view class="export-group">
+      <picker range="{{formats}}" value="{{formatIndex}}" bindchange="changeFormat" disabled="{{busy}}"><view class="format">{{formats[formatIndex]}} ▾</view></picker>
+      <button class="primary" bindtap="exportPhoto" disabled="{{!ready || busy}}" loading="{{busy}}">保存图片</button>
+    </view>
+  </view>
+  <view class="stage" style="height:{{stageHeight}}px">
+    <canvas type="2d" id="preview" class="preview" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
+    <view class="empty" wx:if="{{!ready}}"><view class="empty-title">从一张照片开始</view><text>选择相册图片或拍一张照片</text><button class="primary" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">选择图片</button></view>
+    <view class="stage-footer">
+      <view class="view-actions">
+        <picker range="{{viewOptions}}" bindchange="changeView" disabled="{{!ready || busy}}"><view class="view-picker">视图 ▾</view></picker>
+        <button bindtap="compare" disabled="{{!ready || busy}}">{{comparing ? '调色' : '原图'}}</button>
+      </view>
+      <view class="image-actions"><button bindtap="undo" disabled="{{!ready || !canUndo || busy}}">↶ 返回上一步</button><button bindtap="reset" disabled="{{!ready || busy}}">重置全部</button></view>
+    </view>
+  </view>
+  <view class="dock">
+    <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab">{{item.label}}</button></view>
+    <scroll-view class="panel" scroll-y enhanced show-scrollbar="{{false}}">
+      <view class="panel-inner" wx:if="{{tab!=='history'}}">
+        <view class="presets" wx:if="{{tab==='adjust'}}"><text>预设</text><button wx:for="{{presets}}" wx:key="key" data-key="{{item.key}}" bindtap="applyPreset" disabled="{{!ready || busy}}" class="{{preset===item.key?'chosen':''}}">{{item.label}}</button></view>
+        <view class="frame-toggle" wx:else><text>启用画框</text><switch checked="{{frame.enabled}}" color="#bfe586" bindchange="toggleFrame" disabled="{{!ready || busy}}" /></view>
+        <scroll-view class="parameter-list" scroll-x enhanced show-scrollbar="{{false}}"><view class="parameter-row"><button wx:for="{{tab==='frame'?frameList:adjustList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{(tab==='frame'?frameSelected:selected)===item.key?'chosen':''}}">{{item.label}}</button></view></scroll-view>
+        <view class="parameter-label"><text>{{label}}</text><text class="value">{{parameterValue}}</text></view>
+        <view class="slider {{!ready?'disabled':''}}" bindtouchstart="sliderStart" bindtouchmove="sliderMove" bindtouchend="sliderEnd" bindtouchcancel="sliderCancel"><view class="track"><view class="track-fill" style="width:{{percent}}%"></view><view class="thumb" style="left:{{percent}}%"></view></view></view>
+        <view wx:if="{{tab==='frame'}}" class="caption"><text>底部文字</text><input value="{{frame.caption}}" maxlength="60" placeholder="留空则不显示文字" bindinput="captionInput" bindblur="captionBlur" disabled="{{!ready || busy}}" confirm-type="done" /></view>
+        <view class="export-size"><text>导出尺寸</text><picker range="{{sizes}}" value="{{sizeIndex}}" bindchange="changeSize" disabled="{{busy}}"><text>{{sizes[sizeIndex]}} ▾</text></picker></view>
+        <view class="status">{{status}}</view>
+      </view>
+      <view wx:else class="panel-inner">
+        <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 撤回</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 重做</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
+        <view wx:if="{{!ready}}" class="status">选图后自动记录调色和画框步骤</view>
+        <view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><text>{{item.index}} · {{item.label}}</text><text class="status">{{item.index===current?'当前':(item.parent===null?'起点':'基于步骤 '+item.parent)}}</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view>
+        <view class="status">返回后继续调整会保留旧记录。换图或关闭页面会清空步骤。</view>
+      </view>
+    </scroll-view>
+  </view>
+  <canvas type="2d" id="export-canvas" class="export-canvas"></canvas>
+  <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。照片只在设备上处理，不上传服务器。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
+</view>

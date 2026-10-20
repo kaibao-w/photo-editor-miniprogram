@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/editor/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "光影",
+    "navigationBarBackgroundColor": "#111412",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#111412"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "__usePrivacyCheck__": true
+}

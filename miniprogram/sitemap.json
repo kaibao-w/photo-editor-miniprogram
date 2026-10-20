@@ -1,0 +1,9 @@
+{
+  "desc": "工具页面",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "*"
+    }
+  ]
+}
