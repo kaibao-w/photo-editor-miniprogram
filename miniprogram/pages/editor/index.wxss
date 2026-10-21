@@ -24,7 +24,6 @@
 .tabs .active{color:#c9ee8a;border-bottom-color:#c9ee8a}
 .panel{height:0;min-height:0;flex:1}.panel-inner{padding:12px 16px}
 
-.frame-toggle{display:flex;align-items:center;justify-content:flex-start;gap:7px;min-height:28px;margin-bottom:8px;color:#b1b9b2;font-size:12px}.frame-toggle{position:relative}.frame-toggle checkbox{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}.frame-check{display:flex;align-items:center;justify-content:center;flex:none;width:14px;height:14px;border:1px solid #65715c;border-radius:50%;background:#131714;color:#c9ee8a}.frame-check.checked{border-color:#c9ee8a;background:#2b3524}.frame-check text{font-size:10px;line-height:12px}.frame-check.disabled{opacity:.45}
 .parameter-list{width:100%;white-space:nowrap;margin-bottom:8px}.parameter-row{display:inline-block;white-space:nowrap;padding-bottom:4px}
 .parameter-row button{display:inline-block;vertical-align:middle;flex:none;width:auto;min-width:0;margin:0 6px 0 0;border:1px solid transparent;border-radius:8px;background:transparent;color:#a4aea6;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap}
 .parameter-row button:last-child{margin-right:0}.parameter-row.color-parameters{display:flex;width:100%}.color-parameters button{flex:0 0 calc(18.181818% - 5.454545px);width:calc(18.181818% - 5.454545px);min-width:0;min-height:52px;padding:3px 2px 4px;text-align:center}.parameter-icon{display:block;font-size:20px;line-height:24px;margin-bottom:3px}
@@ -51,7 +50,6 @@
 
 /* Keep all frame controls visible; the dock alone owns the bottom safe area. */
 .frame-panel{display:flex;flex-direction:column;gap:8px;padding-top:10px;padding-bottom:10px}
-.frame-panel .frame-toggle{height:28px;min-height:28px;margin:0}
 .frame-panel .frame-list{display:block;height:38px;flex:none;margin:0}
 .frame-panel .frame-parameters{padding-bottom:0}
 .frame-panel .slider-row{height:42px;flex:none;margin:0}
@@ -68,13 +66,80 @@
 
 .saved-scroll{flex:1;width:0;min-width:0;height:54px;white-space:nowrap}.saved-strip{display:flex;gap:8px;width:100%;height:48px}
 .saved-card{display:flex;align-items:center;flex:0 0 128px;width:128px;min-width:0;background:#252c26;border:1px solid #343b35;border-radius:8px;overflow:hidden}
-.saved-card .saved-main{flex:1;width:0;min-width:0;background:transparent;text-align:left;padding:5px 7px}.saved-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.saved-state{display:block;font-size:10px;line-height:16px;color:#8e9c89}.saved-card .saved-more{flex:none;width:28px;padding:0;line-height:42px;background:transparent;font-size:12px}
+.saved-card .saved-main{display:flex;align-items:center;flex:1;width:0;min-width:0;background:transparent;text-align:left;padding:5px 7px}.saved-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.saved-card .saved-more{flex:none;width:28px;padding:0;line-height:42px;background:transparent;font-size:12px}
 .preset-empty{display:flex;align-items:center;flex:1;min-width:0;height:54px;color:#8e9c89;font-size:11px}
 .preset-actions{display:flex;gap:8px}.preset-actions button{flex:1;width:0;min-width:0;height:36px;padding:7px 8px;font-size:12px}
-.preset-sync-status{display:flex;align-items:center;gap:8px;height:24px;margin-top:4px;color:#7f8c80;font-size:10px}.preset-sync-status text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preset-sync-status button{flex:none;padding:0 4px;min-height:24px;font-size:11px;line-height:24px;background:transparent;color:#a4aea6}
-
 .adjust-panel{padding-top:16px}.adjust-panel .slider-row{margin-top:12px}.caption>text{width:52px}.stage-footer{border-bottom:1px solid #171c18}.tabs button[disabled]{background:transparent!important}
 
-.saved-card.selected-preset{border-color:#637c49;background:#293322}.selected-preset .saved-name{color:#c9ee8a}
+.saved-card.selected-preset{border-color:#526443;background:#2b3524}.selected-preset .saved-name{color:#c9ee8a}
 
 .stage-footer .compare-button.comparing{color:#c9ee8a;background:#293322}
+
+/* Give the photo more of the viewport and tighten the supporting controls. */
+.toolbar{height:44px;flex-basis:44px;padding:5px 10px}
+.toolbar .toolbar-button{height:32px;min-height:32px;line-height:30px;font-size:12px;border-radius:7px}
+.toolbar .toolbar-format,.toolbar .format{height:32px;font-size:11px}
+.stage-footer{height:36px;padding:3px 10px;gap:5px}
+.stage-footer button{min-height:28px;padding:4px 6px;font-size:11px}
+.view-actions,.image-actions{gap:4px}
+.tabs{height:40px;padding:0 12px}
+.tabs button{min-height:38px;padding:8px 4px;font-size:13px}
+.panel-inner{padding:9px 12px}
+.frame-panel{gap:5px;padding-top:7px;padding-bottom:7px}
+.frame-panel .frame-list{height:32px}
+.parameter-row.frame-parameters button{min-height:30px;padding:4px 1px;font-size:11px}
+.frame-panel .slider-row{height:36px}
+.slider{height:36px;padding:15px 9px}
+.thumb{width:18px;height:18px}
+.slider-row{gap:8px;margin-top:5px}
+.slider-row .value{font-size:13px}
+.frame-panel .caption{height:32px}
+.caption{gap:8px;font-size:11px}
+.caption input{height:32px;line-height:30px;padding:0 8px;font-size:13px}
+.color-list{height:52px;min-height:52px;margin-bottom:5px}
+.color-parameters button{min-height:46px;padding:2px 1px 3px;font-size:11px}
+.parameter-icon{font-size:17px;line-height:20px;margin-bottom:2px}
+.adjust-panel{padding-top:10px}
+.adjust-panel .slider-row{margin-top:7px}
+.preset-panel{padding-top:7px;padding-bottom:4px}
+.preset-section{gap:8px;margin-bottom:6px}
+.preset-heading{flex-basis:46px;width:46px;font-size:11px}
+.recommended-presets{gap:6px}
+.recommended-presets button{height:32px;padding:5px 2px;font-size:11px}
+.saved-scroll{height:38px}
+.saved-strip{height:32px;gap:6px}
+.saved-card{height:32px;flex:0 0 calc(33.333333% - 4px);width:calc(33.333333% - 4px);box-sizing:border-box;background:#252c26;border:1px solid transparent;border-radius:8px}
+.saved-card .saved-main{padding:4px 6px}
+.saved-name{font-size:11px}
+.saved-card .saved-more{width:24px;line-height:36px;font-size:11px}
+.preset-empty{height:42px;font-size:10px}
+.preset-actions{gap:6px}
+.preset-actions button{height:32px;padding:5px 6px;font-size:11px}
+.history-actions{gap:6px;margin-bottom:8px}
+.history-actions button{height:30px;font-size:11px;padding:5px 3px}
+.history-row{margin-bottom:6px}
+.history-step{min-height:44px;padding:6px 9px;gap:6px}
+.step-title{font-size:12px;line-height:17px}
+.step-meta{font-size:10px;line-height:14px}
+.history-row .star{flex-basis:34px;width:34px;min-width:34px;font-size:17px}
+.history-list{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 0}
+.history-list .history-row{width:calc(50% - 3px);min-height:48px;margin:0}
+.history-list .history-step{min-height:48px;padding:5px 5px;gap:3px}
+.history-list .step-title{font-size:11px;line-height:15px}
+.history-list .step-meta{font-size:9px;line-height:12px}
+.history-list .current-badge{font-size:9px;line-height:15px;padding:0 4px}
+.history-list .star{flex-basis:28px;width:28px;min-width:28px;font-size:15px}
+.status{font-size:10px;margin-top:6px}
+.empty-title{font-size:18px}
+.empty{gap:10px;padding:18px}
+.empty>text{font-size:12px}
+.empty button{min-height:36px;padding:8px 20px}
+.tabs button{display:flex;align-items:center;justify-content:center;gap:5px}
+.saved-card .saved-main,.saved-card .saved-main[disabled]{height:100%;min-height:0;margin:0;border:0;border-radius:0;background:transparent!important;color:#eef2eb;box-shadow:none}
+.saved-card .saved-main[disabled]{color:#9da89b!important}
+.saved-card .saved-more{flex:0 0 28px;width:28px;height:100%;padding:0;border:0;border-radius:0;background:transparent!important;box-shadow:none}
+.frame-tab-switch{position:relative;display:block;flex:none;width:22px;height:12px;border-radius:8px;background:#424a40;transition:background .15s ease}
+.frame-tab-switch.on{background:#75934e}
+.frame-tab-switch.disabled{opacity:.4}
+.frame-tab-knob{position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:#a4aea6;transition:left .15s ease,background .15s ease}
+.frame-tab-switch.on .frame-tab-knob{left:12px;background:#d8f3a9}

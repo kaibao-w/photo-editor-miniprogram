@@ -1,9 +1,9 @@
 {
-  "description": "光影 · 本地图片调色",
+  "description": "微光快调 · 图片调色",
   "miniprogramRoot": "miniprogram/",
   "compileType": "miniprogram",
-  "appid": "touristappid",
-  "projectname": "photo-editor",
+  "appid": "wx01334577ba7ffaf5",
+  "projectname": "weiguang-kuaitiao",
   "setting": {
     "es6": true,
     "enhance": true,
@@ -35,6 +35,5 @@
     "ignore": [],
     "include": []
   },
-  "editorSetting": {},
-  "cloudfunctionRoot": "cloudfunctions/"
+  "editorSetting": {}
 }

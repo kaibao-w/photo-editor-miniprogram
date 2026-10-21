@@ -5,17 +5,18 @@ const History = require('../../utils/history');
 const { bounds, zoomAt, exportSize } = require('../../utils/view');
 const call = (name, args = {}) => new Promise((resolve, reject) => wx[name]({ ...args, success: resolve, fail: reject }));
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
+const isPrivacyScopeError = error => !!error && (error.errno===112 || error.errNo===112 || /api scope is not declared in the privacy agreement/i.test(error.errMsg||''));
 const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',saturation:'◉',temperature:'◑',tint:'◈'};
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 Page({
   data: {
-    savedPresets:[],selectedPresetId:'',presetScrollTarget:'',cloudStatus:'',syncing:false,
-    ready: false, busy: false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
+    savedPresets:[],selectedPresetId:'',presetScrollTarget:'',
+    ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
     presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'}], preset: '',
-    label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%', status: '图片仅在设备本地处理',
+    label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
   },
   onLoad() {
@@ -23,7 +24,7 @@ Page({
     this._alive = true; this._privacyHandler = resolve => { this._privacyResolve = resolve; this.setData({privacyVisible:true}); };
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
-  onShow(){this.refreshPresets();this.syncPresets();},
+  onShow(){this.refreshPresets();},
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this._alive = false; clearTimeout(this._timer);
@@ -45,9 +46,10 @@ Page({
   },
   measure() {
     const info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
-    // Reserve the complete editing panel and one bottom safe area before sizing the preview.
+    // Keep the editing controls compact so the photo gets most of the viewport.
     const safeBottom = info.safeArea ? Math.max(0, info.screenHeight - info.safeArea.bottom) : 0;
-    const stageHeight = Math.max(44, Math.min(info.windowHeight*.62, info.windowHeight-52-240-safeBottom));
+    // Keep the control dock at the frame panel's compact height for every tab.
+    const stageHeight = Math.max(44, info.windowHeight-44-36-129-safeBottom);
     return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('.preview-surface').boundingClientRect(rect => {
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
@@ -71,13 +73,44 @@ Page({
   commit(label) {if(this.history){this.history.record(this.state(),label);this.syncHistory();}},
   edit(label) {this.setData({comparing:false});this.sync();this.schedule();if(label)this.commit(label);},
   async choosePhoto() {
-    if(this.data.busy || !this.canvas) return;
-    this.setData({busy:true});
+    if(this.data.selectingPhoto || this.data.exporting || !this.canvas) return;
+    this.setData({busy:true,selectingPhoto:true});
     try {
       const result=await call('chooseMedia',{count:1,mediaType:['image'],sourceType:['album','camera'],sizeType:['original']});
-      const path=result.tempFiles[0].tempFilePath; const info=await call('getImageInfo',{src:path});
+      const file=result.tempFiles && result.tempFiles[0];
+      if(!file || !file.tempFilePath) throw new Error('没有获取到图片文件，请重新选择');
+      let path=file.tempFilePath;
+      let info;
+      try { info=await call('getImageInfo',{src:path}); }
+      catch(error) {
+        // If the platform image decoder cannot inspect the original (for example,
+        // an HEIC photo on an older base library), ask the native media stack to
+        // normalize it before passing it to Canvas.
+        if(!wx.compressImage) throw error;
+        const converted=await call('compressImage',{src:path,quality:95});
+        path=converted.tempFilePath || converted.apFilePath || path;
+        info=await call('getImageInfo',{src:path});
+      }
+      // Prefer the normalized local path returned by the native image decoder. On
+      // some real devices, CanvasImage cannot open chooseMedia's original temp path.
+      path=info.path || path;
       if(info.width*info.height>80000000) throw new Error('图片超过8000万像素，请先缩小');
-      const image=this.photo.createImage(); await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=path;});
+      const loadCanvasImage=src=>new Promise((resolve,reject)=>{
+        const image=this.photo.createImage();
+        image.onload=()=>resolve(image);
+        image.onerror=()=>reject(new Error('Canvas 无法解码图片'));
+        image.src=src;
+      });
+      let image;
+      try { image=await loadCanvasImage(path); }
+      catch(firstError) {
+        // Native compression also converts formats such as HEIC to a Canvas-friendly
+        // image on devices whose Canvas 2D decoder does not support the source format.
+        if(!wx.compressImage) throw firstError;
+        const converted=await call('compressImage',{src:path,quality:95});
+        path=converted.tempFilePath || converted.apFilePath || path;
+        image=await loadCanvasImage(path);
+      }
       if(!this._alive) return;
       const w=image.width,h=image.height;if(!w || !h) throw new Error('图片无法解码');
       const scale=Math.min(1,1200/Math.max(w,h));const pw=Math.max(1,Math.round(w*scale)),ph=Math.max(1,Math.round(h*scale));
@@ -86,10 +119,14 @@ Page({
       this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;
       this.initializePhotoEdits();
       if(this.pendingPreset){const row=this.pendingPreset;this.pendingPreset=null;this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.setData({selectedPresetId:row.id});this.history.record(this.state(),'预设 · '+row.name);}
-      this.setData({ready:true,comparing:false,tab:'presets',status:`${w} × ${h} · 本地处理`});
+      this.setData({ready:true,comparing:false,tab:'presets'});
       this.sync();this.syncHistory();this.render();this.fitView();
-    } catch(error) {if(!String(error.errMsg||'').includes('cancel')) this.error(error,error.message || '无法读取图片，请尝试 JPG 或 PNG');}
-    finally {if(this._alive)this.setData({busy:false});}
+    } catch(error) {
+      if(String(error.errMsg||'').includes('cancel')) return;
+      if(isPrivacyScopeError(error)) console.warn('选取图片失败：微信隐私指引缺少对应声明',error);
+      else this.error(error,'无法读取图片，请更换图片后重试（支持 JPG、PNG）');
+    }
+    finally {if(this._alive)this.setData({busy:false,selectingPhoto:false});}
   },
   initializePhotoEdits(){
     this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
@@ -123,12 +160,11 @@ Page({
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
   compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
   compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
-  switchTab(e){this.setData({tab:e.currentTarget.dataset.key});this.sync();},
+  switchTab(e){this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults};this.edit('重置全部');},
   applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:preset.label};this.edit('预设 · '+preset.label);},
-  toggleFrameCheckbox(e){this.toggleFrame({detail:{value:e.detail.value.includes('enabled')}});},
-  toggleFrame(e){if(!this.source || this.data.busy)return;this.frame.enabled=e.detail.value;this.edit(this.frame.enabled?'启用画框':'关闭画框');},
+  toggleFrameTab(){if(!this.source || this.data.busy)return;this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
   captionInput(e){if(!this.source || this.data.busy)return;this.frame.caption=e.detail.value;this.edit();},
   captionBlur(){this.commit('画框 · 底部文字');},
   sliderStart(e){
@@ -171,7 +207,7 @@ Page({
   viewCancel(){this.tap=this.lastTap=this.gesture=null;},
   changeFormat(e){this.setData({formatIndex:Number(e.detail.value)});},
   async exportPhoto(){
-    if(!this.source || this.data.busy)return;this.captionBlur();this.setData({busy:true});
+    if(!this.source || this.data.busy)return;this.captionBlur();this.setData({busy:true,exporting:true});
     const state=this.state(),type=this.data.formatIndex?'png':'jpg';
     const size=exportSize(this.originalWidth,this.originalHeight,true);let photo;
     try {
@@ -183,9 +219,8 @@ Page({
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
       wx.hideLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
-      this.setData({status:`已生成 ${size.width} × ${size.height} ${type.toUpperCase()}`});
     }catch(error){this.error(error,'导出失败，请使用较小的图片重试');}
-    finally {wx.hideLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false});}
+    finally {wx.hideLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false,exporting:false});}
   },
   async saveToAlbum(path){
     try {await call('saveImageToPhotosAlbum',{filePath:path});wx.showToast({title:'已保存到相册'});}
@@ -197,13 +232,12 @@ Page({
     }
   },
   refreshPresets(){try{this.setData({savedPresets:savedPresets.read().filter(r=>!r.deleted).sort((a,b)=>b.updatedAt-a.updatedAt)});}catch(e){this.error(e,'读取预设失败');}},
-  async syncPresets(){if(this.data.syncing)return;this.setData({syncing:true});try{await savedPresets.sync();if(this._alive)this.setData({cloudStatus:'已同步到云端'});}catch(e){if(this._alive)this.setData({cloudStatus:e.message||'同步失败，稍后可重试'});}finally{if(this._alive){this.setData({syncing:false});this.refreshPresets();}}},
   async savePreset(){
     if(!this.source||this.data.busy)return;
     const payload={version:1,name:'',values:{...this.values},frame:{...this.frame}};
     const result=await call('showModal',{title:'保存当前预设',editable:true,placeholderText:'预设名称（最多30字）'});
     if(!result.confirm)return;payload.name=(result.content||'').trim();
-    try{savedPresets.save(payload);this.refreshPresets();this.syncPresets();wx.showToast({title:'已保存到本机',icon:'success'});}catch(e){this.error(e,e.message);}
+    try{savedPresets.save(payload);this.refreshPresets();wx.showToast({title:'预设已保存',icon:'success'});}catch(e){this.error(e,'保存预设失败，请稍后重试');}
   },
   applySavedPreset(e){
     if(!this.source||this.data.busy)return;
@@ -218,18 +252,35 @@ Page({
     const saved=savedPresets.save(row);this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id,presetScrollTarget:'preset-'+saved.id});
     if(this.source&&!this.data.busy){this.applySavedPreset({currentTarget:{dataset:{id:saved.id}}});}
     else{this.pendingPreset=saved;wx.showToast({title:'已选中，选图后应用',icon:'none'});}
-    this.syncPresets();
-  }catch(e){this.error(e,e.message||'导入失败');}},
+  }catch(e){
+    const inputErrors=['请输入完整的微光快调预设码','预设码无效或版本不支持','预设名称或版本无效','调色参数无效','画框参数无效','底部文字无效'];
+    if(inputErrors.includes(e.message)) wx.showToast({title:e.message,icon:'none'});
+    else this.error(e,'导入失败，请检查预设码后重试');
+  }},
   async presetMenu(e){try{
     const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
     const result=await call('showActionSheet',{itemList:['复制分享码','重命名','用当前参数覆盖','删除']});
-    if(result.tapIndex===0){await call('setClipboardData',{data:savedPresets.encode(row)});return;}
+    if(result.tapIndex===0){
+      try {
+        await call('setClipboardData',{data:savedPresets.encode(row)});
+        wx.showToast({title:'分享码已复制',icon:'success'});
+      } catch(error) {
+        if(isPrivacyScopeError(error)) console.warn('复制预设码失败：微信隐私指引缺少对应声明',error);
+        else console.warn('复制预设码失败',error);
+        wx.showToast({title:'复制失败，请稍后重试',icon:'none'});
+      }
+      return;
+    }
     if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;savedPresets.save({...row,name:answer.content},row.id);}
     if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};savedPresets.save(next,row.id);}
-    if(result.tapIndex===3){const answer=await call('showModal',{title:'删除预设',content:'同步后其他设备也将删除，好友已导入的副本不受影响。'});if(!answer.confirm)return;savedPresets.remove(row.id);}
-    this.refreshPresets();this.syncPresets();
-  }catch(e){if(!String(e.errMsg||'').includes('cancel'))this.error(e,e.message||'操作失败');}},
-  openPrivacy(){wx.openPrivacyContract({fail:()=>wx.showToast({title:'请先在小程序后台配置隐私指引',icon:'none'})});},
+    if(result.tapIndex===3){const answer=await call('showModal',{title:'删除预设',content:`确定删除「${row.name}」吗？好友已导入的副本不受影响。`});if(!answer.confirm)return;savedPresets.remove(row.id);}
+    this.refreshPresets();
+  }catch(e){
+    if(String(e.errMsg||'').includes('cancel'))return;
+    if(isPrivacyScopeError(e)) console.warn('复制或管理预设失败：微信隐私指引缺少对应声明',e);
+    else this.error(e,'操作失败，请稍后重试');
+  }},
+  openPrivacy(){wx.openPrivacyContract({fail:error=>console.warn('打开隐私保护指引失败：请检查小程序后台配置',error)});},
   agreePrivacy(){if(this._privacyResolve)this._privacyResolve({buttonId:'privacyAgree',event:'agree'});this._privacyResolve=null;this.setData({privacyVisible:false});},
   declinePrivacy(){if(this._privacyResolve)this._privacyResolve({event:'disagree'});this._privacyResolve=null;this.setData({privacyVisible:false});}
 });

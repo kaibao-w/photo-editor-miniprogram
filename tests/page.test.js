@@ -10,9 +10,18 @@ test('declining album permission previews result',async()=>{const p=page(),calls
 test('approved settings flow retries save',async()=>{const p=page();let count=0;global.wx={saveImageToPhotosAlbum(o){if(++count===1)o.fail({});else o.success({});},getSetting(o){o.success({authSetting:{'scope.writePhotosAlbum':false}});},showModal(o){o.success({confirm:true});},openSetting(o){o.success({authSetting:{'scope.writePhotosAlbum':true}});},showToast(){}};await p.saveToAlbum('/tmp/result.png');assert.equal(count,2);});
 test('privacy callback agrees explicitly',()=>{const p=page();let event;p._privacyResolve=e=>event=e;p.agreePrivacy();assert.equal(event.buttonId,'privacyAgree');assert.equal(event.event,'agree');assert.equal(p.data.privacyVisible,false);});
 
+test('choose photo remains available during editing and replaces the current image',async()=>{
+ const p=page();p.canvas={};p.canvasReady=true;p._alive=true;p.data.ready=true;p.data.busy=true;p.data.selectingPhoto=false;p.data.exporting=false;
+ const previous={data:new Uint8ClampedArray([1,1,1,255])};p.source=previous;p.image={};p.photo={createImage(){const image={width:20,height:10};Object.defineProperty(image,'src',{set(){image.onload();}});return image;}};
+ p.createCanvas=()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray([2,2,2,255])})})});
+ p.initializePhotoEdits=()=>{};p.sync=()=>{};p.syncHistory=()=>{};p.render=()=>{};p.fitView=()=>{};
+ let opened=0;global.wx={chooseMedia:o=>{opened++;o.success({tempFiles:[{tempFilePath:'/new.jpg'}]});},getImageInfo:o=>o.success({path:'/new.jpg',width:20,height:10})};
+ await p.choosePhoto();assert.equal(opened,1);assert.notEqual(p.source,previous);assert.equal(p.data.ready,true);assert.equal(p.data.busy,false);assert.equal(p.data.selectingPhoto,false);
+});
+
 test('history display is newest first without changing step identity',()=>{const p=page();p.source={};p.values.exposure=.5;p.commit('exposure');p.values.contrast=20;p.commit('contrast');assert.deepEqual(p.data.history.map(s=>s.index),[2,1,0]);assert.equal(p.history.items[2].parent,1);p.gotoStep({currentTarget:{dataset:{index:1}}});assert.equal(p.values.exposure,.5);assert.equal(p.values.contrast,0);p.undo();assert.equal(p.values.exposure,0);});
 
-test('H5-style tabs select correct controls and checkbox controls framing',()=>{const p=page();p.source={};p.switchTab({currentTarget:{dataset:{key:'frame'}}});assert.equal(p.data.label,'图片大小');p.toggleFrameCheckbox({detail:{value:[]}});assert.equal(p.frame.enabled,false);p.toggleFrameCheckbox({detail:{value:['enabled']}});assert.equal(p.frame.enabled,true);assert.equal(p.data.adjustList[0].icon,'☼');});
+test('frame tab switch controls framing without a separate control row',()=>{const p=page();p.source={};p.switchTab({currentTarget:{dataset:{key:'frame'}}});assert.equal(p.data.label,'图片大小');p.toggleFrameTab();assert.equal(p.frame.enabled,false);assert.equal(p.data.tab,'frame');p.toggleFrameTab();assert.equal(p.frame.enabled,true);assert.equal(p.data.adjustList[0].icon,'☼');});
 
 
 test('continuous slider movement previews before release and records one step',t=>{
@@ -44,7 +53,7 @@ test('queued preview is ignored after unload',t=>{
 test('saving a preset always includes frame state and caption; applying restores them',async()=>{
  const p=page();p.source={};p.frame={...config.frameDefaults,enabled:false,caption:'旅途'};let rows;
  global.wx={showModal:o=>o.success({confirm:true,content:'旅行'}),getStorageSync:()=>rows,setStorageSync:(k,v)=>{rows=v;},showToast(){}};
- p.syncPresets=()=>{};await p.savePreset();
+ await p.savePreset();
  assert.deepEqual(rows[0].frame,p.frame);assert.deepEqual(rows[0].values,p.values);
  p.frame={...config.frameDefaults,caption:'其他'};
  p.applySavedPreset({currentTarget:{dataset:{id:rows[0].id}}});
@@ -66,7 +75,7 @@ test('new photo starts with cold preset and reset has no fallback caption',()=>{
 test('import selects and applies preset, while import before photo queues it',async()=>{
  const store=require('../miniprogram/utils/presets');
  for(const hasPhoto of [true,false]){
-  const p=page();p.syncPresets=()=>{};if(hasPhoto)p.source={};let rows=[];
+  const p=page();if(hasPhoto)p.source={};let rows=[];
   const preset={version:1,name:'好友',values:{...config.defaults(),contrast:30},frame:{...config.frameDefaults,caption:'好友'}};
   let modal=0;global.wx={getStorageSync:()=>rows,setStorageSync:(k,v)=>rows=v,showModal:o=>o.success(++modal===1?{confirm:true,content:store.encode(preset)}:{confirm:true}),showToast(){}};
   await p.importPreset();assert.equal(p.data.selectedPresetId,rows[0].id);assert.equal(p.data.presetScrollTarget,'preset-'+rows[0].id);

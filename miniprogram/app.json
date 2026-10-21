@@ -3,7 +3,7 @@
     "pages/editor/index"
   ],
   "window": {
-    "navigationBarTitleText": "光影",
+    "navigationBarTitleText": "微光快调",
     "navigationBarBackgroundColor": "#111412",
     "navigationBarTextStyle": "white",
     "backgroundColor": "#111412"

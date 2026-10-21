@@ -1,6 +1,6 @@
 <view class="workspace">
   <view class="toolbar">
-    <button class="toolbar-button toolbar-choose" size="mini" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">＋ 选图</button>
+    <button class="toolbar-button toolbar-choose" size="mini" bindtap="choosePhoto" disabled="{{selectingPhoto || exporting || !canvasReady}}">＋ 选图</button>
     <view class="export-group">
       <picker class="toolbar-format" range="{{formats}}" value="{{formatIndex}}" bindchange="changeFormat" disabled="{{busy}}"><view class="format">{{formats[formatIndex]}} ▾</view></picker>
       <button class="primary toolbar-button toolbar-save" size="mini" bindtap="exportPhoto" disabled="{{!ready || busy}}" loading="{{busy}}">保存图片</button>
@@ -19,10 +19,9 @@
     </view>
   </view>
   <view class="dock">
-    <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab">{{item.label}}</button></view>
+    <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab"><text>{{item.label}}</text><view wx:if="{{item.key==='frame'}}" class="frame-tab-switch {{frame.enabled?'on':''}} {{!ready || busy?'disabled':''}}" catchtap="toggleFrameTab"><view class="frame-tab-knob"></view></view></button></view>
     <scroll-view class="panel" scroll-y enhanced show-scrollbar="{{false}}">
       <view class="panel-inner {{tab==='frame'?'frame-panel':'adjust-panel'}}" wx:if="{{tab==='adjust' || tab==='frame'}}">
-        <checkbox-group wx:if="{{tab==='frame'}}" bindchange="toggleFrameCheckbox"><label class="frame-toggle"><checkbox value="enabled" checked="{{frame.enabled}}" color="#c9ee8a" disabled="{{!ready || busy}}" /><text>启用画框</text><view class="frame-check {{frame.enabled?'checked':''}} {{!ready || busy?'disabled':''}}"><text wx:if="{{frame.enabled}}">✓</text></view></label></checkbox-group>
         <scroll-view wx:if="{{tab==='adjust'}}" class="parameter-list color-list" scroll-x enhanced show-scrollbar="{{false}}"><view class="parameter-row color-parameters"><button wx:for="{{adjustList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{selected===item.key?'chosen':''}}"><text class="parameter-icon">{{item.icon}}</text><text>{{item.label}}</text></button></view></scroll-view>
         <view wx:else class="parameter-list frame-list"><view class="parameter-row frame-parameters"><button wx:for="{{frameList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{frameSelected===item.key?'chosen':''}}"><text>{{item.label}}</text></button></view></view>
         <view class="slider-row">
@@ -33,21 +32,20 @@
         <view class="preset-section"><text class="preset-heading">推荐预设</text><view class="recommended-presets"><button wx:for="{{presets}}" wx:key="key" data-key="{{item.key}}" bindtap="applyPreset" disabled="{{!ready || busy}}" class="{{preset===item.key?'chosen':''}}">{{item.label}}</button></view></view>
         <view class="preset-section mine-section">
           <text class="preset-heading">我的预设</text>
-          <scroll-view wx:if="{{savedPresets.length}}" class="saved-scroll" scroll-into-view="{{presetScrollTarget}}" scroll-x enhanced show-scrollbar="{{true}}"><view class="saved-strip"><view wx:for="{{savedPresets}}" wx:key="id" id="preset-{{item.id}}" class="saved-card {{selectedPresetId===item.id?'selected-preset':''}}"><button class="saved-main" data-id="{{item.id}}" bindtap="applySavedPreset" disabled="{{!ready || busy}}"><text class="saved-name">{{item.name}}</text><text class="saved-state">{{item.dirty?'待同步':'已同步'}}</text></button><button class="saved-more" data-id="{{item.id}}" bindtap="presetMenu">•••</button></view></view></scroll-view>
+          <scroll-view wx:if="{{savedPresets.length}}" class="saved-scroll" scroll-into-view="{{presetScrollTarget}}" scroll-x enhanced show-scrollbar="{{true}}"><view class="saved-strip"><view wx:for="{{savedPresets}}" wx:key="id" id="preset-{{item.id}}" class="saved-card {{selectedPresetId===item.id?'selected-preset':''}}"><button class="saved-main" data-id="{{item.id}}" bindtap="applySavedPreset" disabled="{{!ready || busy}}"><text class="saved-name">{{item.name}}</text></button><button class="saved-more" data-id="{{item.id}}" bindtap="presetMenu">•••</button></view></view></scroll-view>
           <text wx:else class="preset-empty">暂无预设，可保存当前效果或导入</text>
         </view>
         <view class="preset-actions"><button bindtap="importPreset">导入预设码</button><button class="primary" bindtap="savePreset" disabled="{{!ready || busy}}">＋ 保存当前</button></view>
-        <view class="preset-sync-status"><text>{{cloudStatus}}</text><button bindtap="syncPresets" loading="{{syncing}}" disabled="{{syncing}}">同步</button></view>
       </view>
       <view wx:else class="panel-inner">
         <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 撤回</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 重做</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
         <view wx:if="{{!ready}}" class="status">选图后自动记录调色和画框步骤</view>
-        <view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><view class="step-copy"><text class="step-title">{{item.label}}</text><text class="step-meta">步骤 {{item.index}} · {{item.parent===null?'起点':'基于步骤 '+item.parent}}</text></view><text wx:if="{{item.index===current}}" class="current-badge">当前</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view>
+        <view class="history-list"><view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><view class="step-copy"><text class="step-title">{{item.label}}</text><text class="step-meta">步骤 {{item.index}} · {{item.parent===null?'起点':'基于步骤 '+item.parent}}</text></view><text wx:if="{{item.index===current}}" class="current-badge">当前</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view></view>
         <view class="status">返回后继续调整会保留旧记录。换图或关闭页面会清空步骤。</view>
       </view>
     </scroll-view>
 
   </view>
   <canvas type="2d" id="export-canvas" class="export-canvas"></canvas>
-  <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。照片只在设备上处理，不上传服务器。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
+  <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。你选择的照片仅用于图片编辑，不会上传到服务器。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
 </view>
