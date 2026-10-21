@@ -10,12 +10,12 @@ const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 Page({
   data: {
-    savedPresets:[],selectedPresetId:'',presetScrollTarget:'',
+    savedPresets:[],selectedPresetId:'',
     ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
-    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'}], preset: '',
+    presets: [{key:'night',label:'冷调'},{key:'landscape',label:'风光'},{key:'portrait',label:'人像'},{key:'clear',label:'清透'},{key:'warm',label:'暖色'}], preset: '',
     label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
   },
@@ -25,6 +25,7 @@ Page({
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
   onShow(){this.refreshPresets();},
+  onShareAppMessage(){return {title:'微光快调 · 图片调色',path:'/pages/editor/index'};},
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this._alive = false; clearTimeout(this._timer);
@@ -49,7 +50,7 @@ Page({
     // Keep the editing controls compact so the photo gets most of the viewport.
     const safeBottom = info.safeArea ? Math.max(0, info.screenHeight - info.safeArea.bottom) : 0;
     // Keep the control dock at the frame panel's compact height for every tab.
-    const stageHeight = Math.max(44, info.windowHeight-44-36-129-safeBottom);
+    const stageHeight = Math.max(44, info.windowHeight-44-36-139-safeBottom);
     return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('.preview-surface').boundingClientRect(rect => {
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
@@ -131,7 +132,7 @@ Page({
   initializePhotoEdits(){
     this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
     this.values={...config.defaults(),...config.presets.night};
-    this.frame={...config.frameDefaults,caption:'冷调'};
+    this.frame={...config.frameDefaults,caption:'微光快调 - 冷调'};
     this.history.record(this.state(),'预设 · 冷调');
   },
   schedule() {
@@ -152,7 +153,7 @@ Page({
   },
   drawView() {
     if(!this.ctx || !this.rect) return;
-    const {width:w,height:h}=this.rect;this.ctx.setTransform(this.dpr,0,0,this.dpr,0,0);this.ctx.fillStyle='#080a0c';this.ctx.fillRect(0,0,w,h);
+    const {width:w,height:h}=this.rect;this.ctx.setTransform(this.dpr,0,0,this.dpr,0,0);this.ctx.fillStyle='#050605';this.ctx.fillRect(0,0,w,h);
     if(!this.source)return;const ratio=this.source.height/this.source.width;this.view=bounds(this.view,w,h,ratio);
     const pw=w*this.view.zoom,ph=pw*ratio;this.ctx.drawImage(this.composite,(w-pw)/2+this.view.x,(h-ph)/2+this.view.y,pw,ph);
     this.setData({zoomLabel:Math.round(this.view.zoom*100)+'%'});
@@ -162,8 +163,8 @@ Page({
   compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
   switchTab(e){this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
-  reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults};this.edit('重置全部');},
-  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:preset.label};this.edit('预设 · '+preset.label);},
+  reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
+  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
   toggleFrameTab(){if(!this.source || this.data.busy)return;this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
   captionInput(e){if(!this.source || this.data.busy)return;this.frame.caption=e.detail.value;this.edit();},
   captionBlur(){this.commit('画框 · 底部文字');},
@@ -242,14 +243,13 @@ Page({
   applySavedPreset(e){
     if(!this.source||this.data.busy)return;
     const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
-    this.setData({selectedPresetId:row.id,presetScrollTarget:'preset-'+row.id});this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.edit('预设 · '+row.name);
-    wx.showToast({title:'已应用，可撤销',icon:'none'});
+    this.setData({selectedPresetId:row.id});this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.edit('预设 · '+row.name);
   },
   async importPreset(){try{
     const result=await call('showModal',{title:'导入预设码',editable:true,placeholderText:'粘贴 GY1: 开头的完整预设码'});if(!result.confirm)return;
     const row=savedPresets.decode(result.content);
     const confirm=await call('showModal',{title:row.name,content:'包含调色参数'+(row.frame?'、画框参数':'')+(row.frame&&row.frame.caption!==undefined?'、底部文字':'')+'，是否导入我的预设？'});if(!confirm.confirm)return;
-    const saved=savedPresets.save(row);this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id,presetScrollTarget:'preset-'+saved.id});
+    const saved=savedPresets.save(row);this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id});
     if(this.source&&!this.data.busy){this.applySavedPreset({currentTarget:{dataset:{id:saved.id}}});}
     else{this.pendingPreset=saved;wx.showToast({title:'已选中，选图后应用',icon:'none'});}
   }catch(e){

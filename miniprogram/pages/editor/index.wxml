@@ -29,13 +29,13 @@
         <view wx:if="{{tab==='frame'}}" class="caption"><text>底部文字</text><input value="{{frame.caption}}" maxlength="60" placeholder="留空则不显示文字" bindinput="captionInput" bindblur="captionBlur" disabled="{{!ready || busy}}" confirm-type="done" /></view>
       </view>
       <view wx:elif="{{tab==='presets'}}" class="panel-inner preset-panel">
-        <view class="preset-section"><text class="preset-heading">推荐预设</text><view class="recommended-presets"><button wx:for="{{presets}}" wx:key="key" data-key="{{item.key}}" bindtap="applyPreset" disabled="{{!ready || busy}}" class="{{preset===item.key?'chosen':''}}">{{item.label}}</button></view></view>
+        <view class="preset-section"><text class="preset-heading">推荐预设</text><scroll-view class="recommended-scroll" scroll-x enhanced show-scrollbar="{{false}}"><view class="recommended-strip"><button wx:for="{{presets}}" wx:key="key" data-key="{{item.key}}" bindtap="applyPreset" disabled="{{!ready || busy}}" class="{{preset===item.key?'chosen':''}}">{{item.label}}</button></view></scroll-view></view>
         <view class="preset-section mine-section">
           <text class="preset-heading">我的预设</text>
-          <scroll-view wx:if="{{savedPresets.length}}" class="saved-scroll" scroll-into-view="{{presetScrollTarget}}" scroll-x enhanced show-scrollbar="{{true}}"><view class="saved-strip"><view wx:for="{{savedPresets}}" wx:key="id" id="preset-{{item.id}}" class="saved-card {{selectedPresetId===item.id?'selected-preset':''}}"><button class="saved-main" data-id="{{item.id}}" bindtap="applySavedPreset" disabled="{{!ready || busy}}"><text class="saved-name">{{item.name}}</text></button><button class="saved-more" data-id="{{item.id}}" bindtap="presetMenu">•••</button></view></view></scroll-view>
+          <scroll-view wx:if="{{savedPresets.length}}" class="saved-scroll" scroll-x enhanced show-scrollbar="{{true}}"><view class="saved-strip"><view wx:for="{{savedPresets}}" wx:key="id" class="saved-card {{selectedPresetId===item.id?'selected-preset':''}}"><button class="saved-main" data-id="{{item.id}}" bindtap="applySavedPreset" disabled="{{!ready || busy}}"><text class="saved-name">{{item.name}}</text></button><button class="saved-more" data-id="{{item.id}}" bindtap="presetMenu">⋮</button></view></view></scroll-view>
           <text wx:else class="preset-empty">暂无预设，可保存当前效果或导入</text>
         </view>
-        <view class="preset-actions"><button bindtap="importPreset">导入预设码</button><button class="primary" bindtap="savePreset" disabled="{{!ready || busy}}">＋ 保存当前</button></view>
+        <view class="preset-actions"><button bindtap="importPreset">导入预设码</button><button class="primary" bindtap="savePreset" disabled="{{!ready || busy}}">＋ 保存为预设</button></view>
       </view>
       <view wx:else class="panel-inner">
         <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 撤回</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 重做</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
