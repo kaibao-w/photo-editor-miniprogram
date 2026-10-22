@@ -1,3 +1,5 @@
+const loading=require('../../utils/loading');
+const contentSafety=require('../../utils/content-safety');
 const savedPresets=require('../../utils/presets');
 const aiEditor=require('../../utils/ai-editor');
 const config = require('../../utils/config');
@@ -9,10 +11,10 @@ const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 const isPrivacyScopeError = error => !!error && (error.errno===112 || error.errNo===112 || /api scope is not declared in the privacy agreement/i.test(error.errMsg||''));
 const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',whites:'◇',blacks:'◆',vibrance:'✧',saturation:'◉',temperature:'◑',tint:'◈'};
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
-Page({
+const editor = {
   ...aiEditor,
   data: {
-    savedPresets:[],selectedPresetId:'',
+    savedPresets:[],selectedPresetId:'',photoCheckStatus:'',captionChecking:false,presetChecking:false,
     aiPrompt:'',aiBusy:false,aiStatus:'描述你想要的亮度、冷暖或色彩风格',aiKeyboardHeight:0,
     aiSuggestions:['自然通透，保留真实色彩','暖调胶片，柔和一点','冷调电影感，控制高光'],
     ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'ai',label:'AI 调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
@@ -29,23 +31,38 @@ Page({
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
   onShow(){this.refreshPresets();},
-  onShareAppMessage(){return {title:'微光快调 · 图片调色',path:'/pages/editor/index'};},
+  onShareAppMessage(){
+    const covers=['photography','comparison','glow','film'];
+    const cover=covers[Math.floor(Math.random()*covers.length)];
+    const titles=[
+      '微光快调｜轻松调色，留住好光景',
+      '微光快调｜给日常照片一点好颜色',
+      '微光快调｜把喜欢的瞬间，调成喜欢的色彩',
+      '微光快调｜清透、暖色、胶片，找到你的风格',
+      '微光快调｜为照片添点光，也添点心情',
+      '微光快调｜换一种色调，重温这一刻',
+      '微光快调｜调好颜色，装下美好',
+      '微光快调｜让随手拍，也有自己的风格'
+    ];
+    const title=titles[Math.floor(Math.random()*titles.length)];
+    return {title,path:'/pages/editor/index',imageUrl:'/assets/share/'+cover+'.jpg'};
+  },
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this.cancelAi();this._alive = false; clearTimeout(this._timer);
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
-    for(const canvas of [this.canvas, this.exportCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
-    this.source = this.image = null;
+    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
+    this.source = this.image = this._photoCheck = null;
   },
   onHide(){this.compareEnd();},
   onResize() { if(this.canvas) this.measure(); },
   createCanvas(width, height) { return wx.createOffscreenCanvas({type:'2d',width,height}); },
   async initialize() {
     if (!wx.createOffscreenCanvas) throw new Error('需要支持 Canvas 2D 的微信版本');
-    const nodes = await new Promise(resolve => wx.createSelectorQuery().in(this).select('#preview').fields({node:true,size:true}).select('#export-canvas').fields({node:true,size:true}).exec(resolve));
-    if(!nodes[0] || !nodes[0].node || !nodes[1] || !nodes[1].node) throw new Error('无法获取 Canvas 2D 节点');
-    this.canvas=nodes[0].node; this.ctx=this.canvas.getContext('2d'); this.exportCanvas=nodes[1].node;
+    const nodes = await new Promise(resolve => wx.createSelectorQuery().in(this).select('#preview').fields({node:true,size:true}).select('#export-canvas').fields({node:true,size:true}).select('#safety-canvas').fields({node:true,size:true}).exec(resolve));
+    if(!nodes[0] || !nodes[0].node || !nodes[1] || !nodes[1].node || !nodes[2] || !nodes[2].node) throw new Error('无法获取 Canvas 2D 节点');
+    this.canvas=nodes[0].node; this.ctx=this.canvas.getContext('2d'); this.exportCanvas=nodes[1].node; this.safetyCanvas=nodes[2].node;
     this.photo=this.createCanvas(1,1); this.composite=this.createCanvas(1,1);
     await this.measure(); this.setData({canvasReady:true});
   },
@@ -59,7 +76,71 @@ Page({
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
   },
-  error(error, fallback) { console.warn(fallback, error); wx.showToast({title:fallback,icon:'none'}); },
+  error(error, fallback) {
+    if(error.safety==='cancel')return;
+    if(error.safety) {wx.showToast({title:error.safety==='blocked'?'内容含违规信息，请修改后重试':error.safety==='pending'?'内容检测中，请稍后重试':'暂时无法完成检测，请稍后重试',icon:'none'});return;}
+    console.warn(fallback, error); wx.showToast({title:fallback,icon:'none'});
+  },
+  async checkText(text,options){
+    this._safeTexts=this._safeTexts||new Set();
+    if(!text || this._safeTexts.has(text))return;
+    await contentSafety.text(text,options);
+    this._safeTexts.add(text);
+  },
+  async checkPreset(row){
+    savedPresets.validate(row);
+    await this.checkText(row.name,{foreground:false});
+    await this.checkText(row.frame && row.frame.caption,{foreground:false});
+  },
+  async prepareDetection(image,width,height){
+    const scale=Math.min(1,750/width,750/height);
+    // wx.canvasToTempFilePath requires a page Canvas component, not OffscreenCanvas.
+    const canvas=this.safetyCanvas;
+    if(!canvas){console.warn('contentSafety: safety_canvas_missing');throw contentSafety.failure('unavailable');}
+    canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
+    try{const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);return await contentSafety.prepareImage(canvas);}
+    finally{canvas.width=canvas.height=1;}
+  },
+  async checkImage(image,width,height,options){
+    const prepared=await this.prepareDetection(image,width,height);
+    return contentSafety.checkPreparedImage(prepared,options);
+  },
+  startPhotoCheck(record){
+    if(record.promise)return record.promise;
+    if(!this._alive||this._photoCheck!==record)return Promise.resolve(false);
+    this.setData({photoCheckStatus:'pending'});
+    record.promise=(async()=>{
+      try{
+        const passUntil=await contentSafety.checkPreparedImage(record.prepared,{foreground:false,isCurrent:()=>this._alive&&this._photoCheck===record});
+        if(!this._alive||this._photoCheck!==record)return false;
+        record.passUntil=passUntil;record.error=null;
+        this.setData({photoCheckStatus:'pass'});return true;
+      }catch(error){
+        if(!this._alive||this._photoCheck!==record)return false;
+        record.error=error;record.passUntil=0;
+        if(error.safety==='blocked'){
+          this.cancelAi();
+          this.source=this.image=this.history=null;this.slider=this.gesture=null;this._captionDraft=undefined;
+          this.setData({ready:false,photoCheckStatus:'blocked',history:[],canUndo:false,canRedo:false,comparing:false});this.drawView();
+          if(!this.data.exporting)this.error(error);
+        }else if(error.safety!=='cancel')this.setData({photoCheckStatus:'retry'});
+        return false;
+      }finally{record.promise=null;}
+    })();
+    return record.promise;
+  },
+  async ensurePhotoApproved(){
+    const record=this._photoCheck;
+    if(!record)throw contentSafety.failure('unavailable');
+    if(record.passUntil>0)return;
+    if(!record.promise)throw record.error||contentSafety.failure('pending');
+    const finish=loading.begin('安全检测中');
+    try{
+      const passed=await record.promise;
+      if(!this._alive||this._photoCheck!==record)throw contentSafety.failure('cancel');
+      if(!passed)throw record.error||contentSafety.failure('unavailable');
+    }finally{finish();}
+  },
   state() {return {values:{...this.values},frame:{...this.frame}};},
   sync() {
     const frameMode=this.data.tab==='frame'; const key=frameMode?this.data.frameSelected:this.data.selected;
@@ -78,7 +159,7 @@ Page({
   commit(label) {if(this.history){this.history.record(this.state(),label);this.syncHistory();}},
   edit(label) {this._editRevision=(this._editRevision||0)+1;this.setData({comparing:false});this.sync();this.schedule();if(label)this.commit(label);},
   async choosePhoto() {
-    if(this.data.selectingPhoto || this.data.exporting || !this.canvas) return;
+    if(this.data.selectingPhoto || this.data.exporting || this._securityAction || this._captionPromise || !this.canvas) return;
     this.cancelAi();this.setData({busy:true,selectingPhoto:true});
     try {
       const result=await call('chooseMedia',{count:1,mediaType:['image'],sourceType:['album','camera'],sizeType:['original']});
@@ -121,11 +202,17 @@ Page({
       const scale=Math.min(1,1200/Math.max(w,h));const pw=Math.max(1,Math.round(w*scale)),ph=Math.max(1,Math.round(h*scale));
       const scratch=this.createCanvas(pw,ph),c=scratch.getContext('2d');c.drawImage(image,0,0,pw,ph);
       const pixels=c.getImageData(0,0,pw,ph);scratch.width=scratch.height=1;
+      await contentSafety.consent();
+      const prepared=await this.prepareDetection(image,w,h);
+      if(!this._alive)return;
+      this._captionDraft=undefined;
+      this._photoCheck={prepared,passUntil:0};
       this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;
       this.initializePhotoEdits();
       if(this.pendingPreset){const row=this.pendingPreset;this.pendingPreset=null;this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.setData({selectedPresetId:row.id});this.history.record(this.state(),'预设 · '+row.name);}
       this.setData({ready:true,comparing:false,tab:'presets'});
       this.sync();this.syncHistory();this.render();this.fitView();
+      this.startPhotoCheck(this._photoCheck);
     } catch(error) {
       if(String(error.errMsg||'').includes('cancel')) return;
       if(isPrivacyScopeError(error)) console.warn('选取图片失败：微信隐私指引缺少对应声明',error);
@@ -172,8 +259,20 @@ Page({
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
   applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
   toggleFrameTab(){if(!this.source || this.data.busy)return;this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
-  captionInput(e){if(!this.source || this.data.busy)return;this.frame.caption=e.detail.value;this.edit();},
-  captionBlur(){this.commit('画框 · 底部文字');},
+  captionInput(e){if(!this.source || this.data.busy)return;this._captionDraft=e.detail.value;},
+  async captionBlur(){
+    if(this._captionPromise)return this._captionPromise;
+    if(this._captionDraft===undefined)return true;
+    const photoCheck=this._photoCheck,previous=this.frame.caption,caption=this._captionDraft;this._captionDraft=undefined;
+    this.setData({busy:true,captionChecking:true});
+    this.frame.caption=caption;this.edit();
+    this._captionPromise=(async()=>{
+      try{await this.checkText(caption,{foreground:false});if(!this._alive||this._photoCheck!==photoCheck||!this.source)return false;this.commit('画框 · 底部文字');return true;}
+      catch(error){if(this._alive&&this._photoCheck===photoCheck&&this.source){this.frame.caption=previous;this.edit();this.error(error,'文字暂时无法使用，已恢复');}return false;}
+      finally{this._captionPromise=null;if(this._alive)this.setData({busy:false,captionChecking:false});}
+    })();
+    return this._captionPromise;
+  },
   sliderStart(e){
     if(!this.source || this.data.busy)return;
     const frame=this.data.tab==='frame',key=frame?this.data.frameSelected:this.data.selected;
@@ -214,20 +313,25 @@ Page({
   viewCancel(){this.tap=this.lastTap=this.gesture=null;},
   changeFormat(e){this.setData({formatIndex:Number(e.detail.value)});},
   async exportPhoto(){
-    if(!this.source || this.data.busy)return;this.captionBlur();this.setData({busy:true,exporting:true});
+    if(!this.source || this.data.exporting || (this.data.busy&&!this._captionPromise))return;
+    if(!await this.captionBlur() || !this._alive || this.data.busy)return;
+    this.setData({busy:true,exporting:true});
     const state=this.state(),type=this.data.formatIndex?'png':'jpg';
-    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo;
+    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo,finishLoading;
     try {
-      wx.showLoading({title:'正在生成图片',mask:true});await pause();
+      await this.ensurePhotoApproved();
+      if(!this._alive||!this.source)return;
+      finishLoading=loading.begin('正在生成图片');await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
       if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}pc.drawImage(this.image,0,0,size.width,size.height);
       for(let y=0;y<size.height;y+=128){const h=Math.min(128,size.height-y);pc.putImageData(grade(pc.getImageData(0,y,size.width,h),state.values),0,y);await pause();if(!this._alive)return;}
       this.exportCanvas.width=size.width;this.exportCanvas.height=size.height;const out=this.exportCanvas.getContext('2d');
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);
+      if(!this._alive)return;
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
-      wx.hideLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
-    }catch(error){this.error(error,'导出失败，请使用较小的图片重试');}
-    finally {wx.hideLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false,exporting:false});}
+      if(finishLoading)finishLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
+    }catch(error){if(finishLoading)finishLoading();this.error(error,'导出失败，请使用较小的图片重试');}
+    finally {if(finishLoading)finishLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false,exporting:false});}
   },
   async saveToAlbum(path){
     try {await call('saveImageToPhotosAlbum',{filePath:path});wx.showToast({title:'已保存到相册'});}
@@ -238,26 +342,60 @@ Page({
       wx.previewImage({urls:[path],current:path});
     }
   },
-  refreshPresets(){try{this.setData({savedPresets:savedPresets.read().filter(r=>!r.deleted).sort((a,b)=>b.updatedAt-a.updatedAt)});}catch(e){this.error(e,'读取预设失败');}},
+  async refreshPresets(){
+    try{
+      // Listing saved presets is local-only; user actions still validate content.
+      const rows=savedPresets.read().filter(r=>{
+        if(!r||r.deleted)return false;
+        try{savedPresets.validate(r);return true;}catch(error){return false;}
+      }).sort((a,b)=>b.updatedAt-a.updatedAt);
+      if(this._alive)this.setData({savedPresets:rows});
+    }catch(error){if(this._alive){this.setData({savedPresets:[]});this.error(error,'读取预设失败');}}
+  },
+  async previewPreset(row,{persist=false,id,apply=false,select=false}={}){
+    const valid=savedPresets.validate(row);
+    const previous={rows:this.data.savedPresets,selected:this.data.selectedPresetId,state:this.state(),pending:this.pendingPreset,photo:this._photoCheck};
+    const candidate={...valid,id:id||row.id||`${Date.now().toString(36)}-${Math.random().toString(36).slice(2,12)}`,updatedAt:Date.now()};
+    // Preview immediately, but persist only approval so closing the app cannot retain unchecked text.
+    if(persist)this.setData({savedPresets:[candidate,...previous.rows.filter(r=>r.id!==candidate.id)]});
+    if(select||apply)this.setData({selectedPresetId:candidate.id});
+    if(apply&&this.source){this.values={...candidate.values};if(candidate.frame)this.frame={...this.frame,...candidate.frame};this.edit();}
+    try{
+      await this.checkPreset(candidate);
+      if(!this._alive)return;
+      if(persist){savedPresets.save(candidate,candidate.id);await this.refreshPresets();}
+      if(apply&&this.source&&this._photoCheck===previous.photo)this.commit('预设 · '+candidate.name);
+      if(select&&!this.source)this.pendingPreset=candidate;
+    }catch(error){
+      if(this._alive){
+        this.setData({savedPresets:previous.rows,selectedPresetId:previous.selected});
+        this.pendingPreset=previous.pending;
+        if(apply&&this.source&&this._photoCheck===previous.photo){this.values=previous.state.values;this.frame=previous.state.frame;this.edit();}
+      }
+      throw error;
+    }
+  },
   async savePreset(){
-    if(!this.source||this.data.busy)return;
+    if(!this.source)return;
     const payload={version:1,name:'',values:{...this.values},frame:{...this.frame}};
     const result=await call('showModal',{title:'保存当前预设',editable:true,placeholderText:'预设名称（最多30字）'});
     if(!result.confirm)return;payload.name=(result.content||'').trim();
-    try{savedPresets.save(payload);this.refreshPresets();wx.showToast({title:'预设已保存',icon:'success'});}catch(e){this.error(e,'保存预设失败，请稍后重试');}
+    try{await this.previewPreset(payload,{persist:true});}catch(e){this.error(e,'保存预设失败，请稍后重试');}
   },
-  applySavedPreset(e){
-    if(!this.source||this.data.busy)return;
+  async applySavedPreset(e){
+    if(!this.source)return;
     const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
+    await this.previewPreset(row,{apply:true});
+  },
+  applyApprovedPreset(row){
     this.setData({selectedPresetId:row.id});this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.edit('预设 · '+row.name);
   },
   async importPreset(){try{
     const result=await call('showModal',{title:'导入预设码',editable:true,placeholderText:'粘贴 GY1: 开头的完整预设码'});if(!result.confirm)return;
     const row=savedPresets.decode(result.content);
     const confirm=await call('showModal',{title:row.name,content:'包含调色参数'+(row.frame?'、画框参数':'')+(row.frame&&row.frame.caption!==undefined?'、底部文字':'')+'，是否导入我的预设？'});if(!confirm.confirm)return;
-    const saved=savedPresets.save(row);this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id});
-    if(this.source&&!this.data.busy){this.applySavedPreset({currentTarget:{dataset:{id:saved.id}}});}
-    else{this.pendingPreset=saved;wx.showToast({title:'已选中，选图后应用',icon:'none'});}
+    this.setData({tab:'presets'});
+    await this.previewPreset(row,{persist:true,apply:true,select:true});
   }catch(e){
     const inputErrors=['请输入完整的微光快调预设码','预设码无效或版本不支持','预设名称或版本无效','调色参数无效','画框参数无效','底部文字无效'];
     if(inputErrors.includes(e.message)) wx.showToast({title:e.message,icon:'none'});
@@ -268,19 +406,21 @@ Page({
     const result=await call('showActionSheet',{itemList:['复制分享码','重命名','用当前参数覆盖','删除']});
     if(result.tapIndex===0){
       try {
+        await this.checkPreset(row);if(!this._alive)return;
         await call('setClipboardData',{data:savedPresets.encode(row)});
         wx.showToast({title:'分享码已复制',icon:'success'});
       } catch(error) {
+        if(error.safety){this.error(error);return;}
         if(isPrivacyScopeError(error)) console.warn('复制预设码失败：微信隐私指引缺少对应声明',error);
         else console.warn('复制预设码失败',error);
         wx.showToast({title:'复制失败，请稍后重试',icon:'none'});
       }
       return;
     }
-    if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;savedPresets.save({...row,name:answer.content},row.id);}
-    if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};savedPresets.save(next,row.id);}
+    if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;const next={...row,name:answer.content};await this.previewPreset(next,{persist:true,id:row.id});}
+    if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};await this.previewPreset(next,{persist:true,id:row.id});}
     if(result.tapIndex===3){const answer=await call('showModal',{title:'删除预设',content:`确定删除「${row.name}」吗？好友已导入的副本不受影响。`});if(!answer.confirm)return;savedPresets.remove(row.id);}
-    this.refreshPresets();
+    await this.refreshPresets();
   }catch(e){
     if(String(e.errMsg||'').includes('cancel'))return;
     if(isPrivacyScopeError(e)) console.warn('复制或管理预设失败：微信隐私指引缺少对应声明',e);
@@ -289,4 +429,17 @@ Page({
   openPrivacy(){wx.openPrivacyContract({fail:error=>console.warn('打开隐私保护指引失败：请检查小程序后台配置',error)});},
   agreePrivacy(){if(this._privacyResolve)this._privacyResolve({buttonId:'privacyAgree',event:'agree'});this._privacyResolve=null;this.setData({privacyVisible:false});},
   declinePrivacy(){if(this._privacyResolve)this._privacyResolve({event:'disagree'});this._privacyResolve=null;this.setData({privacyVisible:false});}
-});
+};
+// Serialize preset changes against editing, export, replacement and caption validation.
+for(const method of ['savePreset','applySavedPreset','importPreset','presetMenu']){
+  const action=editor[method];
+  editor[method]=async function(...args){
+    if(this._securityAction || (this.data.busy&&!this._captionPromise))return;
+    if(!await this.captionBlur() || !this._alive || this.data.busy || this._securityAction)return;
+    this._securityAction=true;this.setData({busy:true,presetChecking:true});
+    try{return await action.apply(this,args);}
+    catch(error){if(this._alive)this.error(error,'操作失败，请稍后重试');}
+    finally{this._securityAction=false;if(this._alive)this.setData({busy:false,presetChecking:false});}
+  };
+}
+Page(editor);

@@ -1,0 +1,1 @@
+{"permissions":{"openapi":["security.msgSecCheck","security.mediaCheckAsync"]},"timeout":30,"triggers":[{"name":"cleanup-content-safety","type":"timer","config":"0 */10 * * * * *"}]}

@@ -3,7 +3,7 @@
     <button class="toolbar-button toolbar-choose" size="mini" bindtap="choosePhoto" disabled="{{selectingPhoto || exporting || !canvasReady}}">＋ 选图</button>
     <view class="export-group">
       <picker class="toolbar-format" range="{{formats}}" value="{{formatIndex}}" bindchange="changeFormat" disabled="{{busy}}"><view class="format">{{formats[formatIndex]}} ▾</view></picker>
-      <button class="primary toolbar-button toolbar-save" size="mini" bindtap="exportPhoto" disabled="{{!ready || busy}}" loading="{{busy}}">保存图片</button>
+      <button class="primary toolbar-button toolbar-save" size="mini" bindtap="exportPhoto" disabled="{{!ready || busy}}" loading="{{busy && !captionChecking && !presetChecking}}">保存图片</button>
     </view>
   </view>
   <view class="stage" style="height:{{stageHeight}}px">
@@ -43,7 +43,7 @@
         <view class="ai-result"><text>{{aiStatus}}</text><button bindtap="savePreset" disabled="{{!ready || busy || aiBusy}}">保存预设</button></view>
       </view>
       <view wx:else class="panel-inner">
-        <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 撤回</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 重做</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
+        <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 上一步</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 下一步</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
         <view wx:if="{{!ready}}" class="status">选图后自动记录调色和画框步骤</view>
         <view class="history-list"><view class="history-row" wx:for="{{history}}" wx:key="index"><button class="history-step {{item.index===current?'chosen':''}}" data-index="{{item.index}}" bindtap="gotoStep" disabled="{{busy}}"><view class="step-copy"><text class="step-title">{{item.label}}</text><text class="step-meta">步骤 {{item.index}} · {{item.parent===null?'起点':'基于步骤 '+item.parent}}</text></view><text wx:if="{{item.index===current}}" class="current-badge">当前</text></button><button data-index="{{item.index}}" bindtap="markStep" disabled="{{busy}}" class="star {{item.marked?'marked':''}}">{{item.marked?'★':'☆'}}</button></view></view>
         <view class="status">返回后继续调整会保留旧记录。换图或关闭页面会清空步骤。</view>
@@ -53,5 +53,6 @@
   </view>
   <canvas type="2d" id="ai-canvas" class="export-canvas"></canvas>
   <canvas type="2d" id="export-canvas" class="export-canvas"></canvas>
-  <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。普通编辑在设备上完成。使用 AI 调色时，征得同意后发送缩略图和描述至微信云函数及阿里云百炼。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
+  <canvas type="2d" id="safety-canvas" class="export-canvas"></canvas>
+  <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。检测用图片和输入文字将发送至微信内容安全服务，检测副本临时存储，检测完成或过期后自动清理。使用 AI 调色时，征得同意后发送缩略图和描述至微信云函数及阿里云百炼。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
 </view>
