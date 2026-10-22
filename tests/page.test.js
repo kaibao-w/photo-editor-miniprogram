@@ -140,3 +140,15 @@ test('preset moderation locks replacement and edits until completion',async()=>{
  const pending=p.applySavedPreset({currentTarget:{dataset:{id:'one'}}});await Promise.resolve();await Promise.resolve();
  assert.equal(p.data.busy,true);await p.choosePhoto();p.reset();assert.equal(p.frame.enabled,true);resolve();await pending;assert.equal(p.data.busy,false);
 });
+
+test('image moderation exports the dedicated page canvas and preserves the full-size export',async()=>{
+ const p=page();p.checkImage=definition.checkImage;
+ const draws=[];const ctx={fillRect(){},drawImage(...args){draws.push(args);}};
+ p.safetyCanvas={getContext:()=>ctx};p.exportCanvas={width:4000,height:3000};
+ p.createCanvas=()=>assert.fail('offscreen canvas must not be used for detection export');
+ const api=require('../miniprogram/utils/content-safety'),consent=api.consent,image=api.image;
+ api.consent=async()=>{};api.image=async canvas=>{assert.equal(canvas,p.safetyCanvas);assert.equal(canvas.width,750);assert.equal(canvas.height,563);};
+ global.wx={showLoading(){},hideLoading(){}};
+ try{await p.checkImage(p.exportCanvas,4000,3000);assert.equal(draws[0][0],p.exportCanvas);assert.equal(p.exportCanvas.width,4000);assert.equal(p.exportCanvas.height,3000);assert.equal(p.safetyCanvas.width,1);}
+ finally{api.consent=consent;api.image=image;}
+});

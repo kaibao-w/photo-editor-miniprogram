@@ -19,11 +19,14 @@ async function request(data,allowPending=false) {
     ]);
     const status=response && response.result && response.result.status;
     if(allowPending&&status==='pending')return response.result;
-    if(status!=='pass')throw failure(status==='blocked'?'blocked':'unavailable');
+    if(status!=='pass'){
+      console.warn('contentSafety: response rejected',{stage:data.kind,status:['blocked','unavailable','pending'].includes(status)?status:'invalid_response'});
+      throw failure(status==='blocked'?'blocked':'unavailable');
+    }
     return response.result;
   }catch(error){
     if(error.safety)throw error;
-    console.warn('contentSafety: request failed',{code:error.errCode||error.errno||'unknown'});
+    console.warn('contentSafety: request failed',{stage:data.kind,code:error.errCode||error.errno||'unknown'});
     throw failure('unavailable');
   }finally{clearTimeout(timer);}
 }
@@ -32,12 +35,14 @@ async function text(value) {if(value && value.trim())await request({kind:'text',
 const pendingImages=new Map();
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function image(canvas) {
-  let path;
+  let path,stage='canvas_export';
   try {
     const result=await call('canvasToTempFilePath',{canvas,fileType:'jpg',quality:.8,destWidth:canvas.width,destHeight:canvas.height});
     path=result.tempFilePath;
+    stage='read_detection_file';
     const fs=wx.getFileSystemManager();
     const file=await new Promise((resolve,reject)=>fs.readFile({filePath:path,encoding:'base64',success:resolve,fail:reject}));
+    stage='submit_image';
     let job=pendingImages.get(file.data);
     if(!job||job.expires<Date.now()){
       job=await request({kind:'image',base64:file.data},true);
@@ -45,6 +50,7 @@ async function image(canvas) {
       if(pendingImages.size>=2)pendingImages.delete(pendingImages.keys().next().value);
       job.expires=Date.now()+3500000;pendingImages.set(file.data,job);
     }
+    stage='poll_result';
     const deadline=Date.now()+60000;
     while(Date.now()<deadline){
       const result=await request({kind:'poll',id:job.id},true);
@@ -52,7 +58,11 @@ async function image(canvas) {
       await delay(2000);
     }
     throw failure('pending');
-  }catch(error){if(error.safety)throw error;throw failure('unavailable');}
+  }catch(error){
+    if(error.safety)throw error;
+    console.warn('contentSafety: image preparation failed',{stage,code:error.errCode||error.errno||'unknown',message:stage==='canvas_export'?String(error.errMsg||'').slice(0,240):undefined});
+    throw failure('unavailable');
+  }
   finally{if(path)wx.getFileSystemManager().unlink({filePath:path,fail(){}});}
 }
 module.exports={text,image,consent,failure};

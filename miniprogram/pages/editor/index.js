@@ -36,7 +36,7 @@ const editor = {
     this._alive = false; clearTimeout(this._timer);
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
-    for(const canvas of [this.canvas, this.exportCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
+    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
     this.source = this.image = null;
   },
   onHide(){this.compareEnd();},
@@ -44,9 +44,9 @@ const editor = {
   createCanvas(width, height) { return wx.createOffscreenCanvas({type:'2d',width,height}); },
   async initialize() {
     if (!wx.createOffscreenCanvas) throw new Error('需要支持 Canvas 2D 的微信版本');
-    const nodes = await new Promise(resolve => wx.createSelectorQuery().in(this).select('#preview').fields({node:true,size:true}).select('#export-canvas').fields({node:true,size:true}).exec(resolve));
-    if(!nodes[0] || !nodes[0].node || !nodes[1] || !nodes[1].node) throw new Error('无法获取 Canvas 2D 节点');
-    this.canvas=nodes[0].node; this.ctx=this.canvas.getContext('2d'); this.exportCanvas=nodes[1].node;
+    const nodes = await new Promise(resolve => wx.createSelectorQuery().in(this).select('#preview').fields({node:true,size:true}).select('#export-canvas').fields({node:true,size:true}).select('#safety-canvas').fields({node:true,size:true}).exec(resolve));
+    if(!nodes[0] || !nodes[0].node || !nodes[1] || !nodes[1].node || !nodes[2] || !nodes[2].node) throw new Error('无法获取 Canvas 2D 节点');
+    this.canvas=nodes[0].node; this.ctx=this.canvas.getContext('2d'); this.exportCanvas=nodes[1].node; this.safetyCanvas=nodes[2].node;
     this.photo=this.createCanvas(1,1); this.composite=this.createCanvas(1,1);
     await this.measure(); this.setData({canvasReady:true});
   },
@@ -78,7 +78,10 @@ const editor = {
   },
   async checkImage(image,width,height){
     const scale=Math.min(1,750/width,750/height);
-    const canvas=this.createCanvas(Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale)));
+    // wx.canvasToTempFilePath requires a page Canvas component, not OffscreenCanvas.
+    const canvas=this.safetyCanvas;
+    if(!canvas){console.warn('contentSafety: safety_canvas_missing');throw contentSafety.failure('unavailable');}
+    canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
     try{await contentSafety.consent();wx.showLoading({title:'正在检测内容',mask:true});const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);await contentSafety.image(canvas);}
     finally{wx.hideLoading();canvas.width=canvas.height=1;}
   },

@@ -47,5 +47,6 @@
 
   </view>
   <canvas type="2d" id="export-canvas" class="export-canvas"></canvas>
+  <canvas type="2d" id="safety-canvas" class="export-canvas"></canvas>
   <view class="privacy-mask" wx:if="{{privacyVisible}}"><view class="privacy-card"><view class="empty-title">隐私保护提示</view><view>选图和保存相册前，请阅读并同意隐私保护指引。检测用图片和输入文字将发送至微信内容安全服务，检测副本临时存储，检测完成或过期后自动清理。</view><button class="privacy-link" bindtap="openPrivacy">查看隐私保护指引</button><view class="privacy-actions"><button bindtap="declinePrivacy">暂不使用</button><button id="privacyAgree" class="primary" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="agreePrivacy">同意并继续</button></view></view></view>
 </view>
