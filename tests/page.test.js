@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const config=require('../miniprogram/utils/config'),History=require('../miniprogram/utils/history');
 let definition;global.Page=p=>definition=p;require('../miniprogram/pages/editor/index');delete global.Page;
-function page(){const p={...definition,data:JSON.parse(JSON.stringify(definition.data)),setData(v,cb){Object.assign(this.data,v);if(cb)cb();}};p.values=config.defaults();p.frame={...config.frameDefaults};p.history=new History(p.state());p._alive=true;p.schedule=()=>{};p.checkText=async()=>{};p.checkImage=async()=>{};p.view={zoom:1,x:0,y:0};p.rect={width:400,height:300};return p;}
+function page(){const p={...definition,data:JSON.parse(JSON.stringify(definition.data)),setData(v,cb){Object.assign(this.data,v);if(cb)cb();}};p.values=config.defaults();p.frame={...config.frameDefaults};p.history=new History(p.state());p._alive=true;p.schedule=()=>{};p.checkText=async()=>{};p.checkImage=async()=>{};p.prepareDetection=async()=>'prepared';p.ensurePhotoApproved=async()=>{};p.startPhotoCheck=async()=>true;p.view={zoom:1,x:0,y:0};p.rect={width:400,height:300};return p;}
 test('vertical scroll does not edit; horizontal drag commits once',()=>{const p=page();p.source={};p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:12,clientY:40}]});p.sliderEnd();assert.equal(p.values.exposure,0);assert.equal(p.history.items.length,1);p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:60,clientY:11}]});assert(p.values.exposure>0);assert.equal(p.history.items.length,1);p.sliderEnd();assert.equal(p.history.items.length,2);p.undo();assert.equal(p.values.exposure,0);});
 test('cancelled frame gesture restores original value',()=>{const p=page();p.source={};p.data.tab='frame';p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:90,clientY:11}]});assert.notEqual(p.frame.size,83);p.sliderCancel();assert.equal(p.frame.size,83);assert.equal(p.history.items.length,1);});
 test('hold comparison preserves frame, releases on end/cancel and on page hide',()=>{const p=page();p.source={};let renders=0;p.render=()=>renders++;p.frame.caption='山间';p.values.contrast=20;const before=p.state();p.compareStart();assert.equal(p.data.comparing,true);assert.deepEqual(p.state(),before);p.compareEnd();assert.equal(p.data.comparing,false);assert.equal(renders,2);p.compareEnd();assert.equal(renders,2);p.compareStart();p.onHide();assert.equal(p.data.comparing,false);assert.deepEqual(p.state(),before);assert.equal(p.history.items.length,1);p.data.busy=true;p.compareStart();assert.equal(p.data.comparing,false);p.data.busy=false;p.source=null;p.compareStart();assert.equal(p.data.comparing,false);});
@@ -15,7 +15,7 @@ test('choose photo remains available during editing and replaces the current ima
  const previous={data:new Uint8ClampedArray([1,1,1,255])};p.source=previous;p.image={};p.photo={createImage(){const image={width:20,height:10};Object.defineProperty(image,'src',{set(){image.onload();}});return image;}};
  p.createCanvas=()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray([2,2,2,255])})})});
  p.initializePhotoEdits=()=>{};p.sync=()=>{};p.syncHistory=()=>{};p.render=()=>{};p.fitView=()=>{};
- let opened=0;global.wx={chooseMedia:o=>{opened++;o.success({tempFiles:[{tempFilePath:'/new.jpg'}]});},getImageInfo:o=>o.success({path:'/new.jpg',width:20,height:10})};
+ let opened=0;global.wx={chooseMedia:o=>{opened++;o.success({tempFiles:[{tempFilePath:'/new.jpg'}]});},getStorageSync:()=>true,getImageInfo:o=>o.success({path:'/new.jpg',width:20,height:10})};
  await p.choosePhoto();assert.equal(opened,1);assert.notEqual(p.source,previous);assert.equal(p.data.ready,true);assert.equal(p.data.busy,false);assert.equal(p.data.selectingPhoto,false);
 });
 
@@ -104,13 +104,16 @@ test('caption remains unrendered until approved; rejected text never enters hist
  p.checkText=async()=>{throw safetyFailure();};p.captionInput({detail:{value:'blocked'}});
  assert.equal(await p.captionBlur(),false);assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,2);assert.equal(p.data.busy,false);
 });
-test('rejected replacement keeps old image and history',async()=>{
- const p=page();p.canvas={};const old={};p.source=old;p.image=old;const history=p.history;
- p.photo={createImage(){const image={width:10,height:10};Object.defineProperty(image,'src',{set(){image.onload();}});return image;}};
- p.createCanvas=()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:[]})})});
- p.checkImage=async()=>{throw safetyFailure();};
- let toast;global.wx={chooseMedia:o=>o.success({tempFiles:[{tempFilePath:'/new.jpg'}]}),getImageInfo:o=>o.success({width:10,height:10}),showToast:o=>toast=o.title};
- await p.choosePhoto();assert.equal(p.source,old);assert.equal(p.image,old);assert.equal(p.history,history);assert.equal(p.data.busy,false);assert.equal(toast,'内容含违规信息，请修改后重试');
+test('background rejection clears current image, but stale results cannot clear a new image',async()=>{
+ const api=require('../miniprogram/utils/content-safety'),original=api.checkPreparedImage;
+ const p=page();p.startPhotoCheck=definition.startPhotoCheck;p.source={};p.image={};p.drawView=()=>{};
+ let reject;api.checkPreparedImage=()=>new Promise((_,r)=>reject=r);global.wx={showToast(){}};
+ try{
+  const old=p._photoCheck={prepared:'old'};const pending=p.startPhotoCheck(old);
+  const next=p._photoCheck={prepared:'new'};reject(safetyFailure());await pending;assert(p.source);
+  const current=p.startPhotoCheck(next);reject(safetyFailure());await current;
+  assert.equal(p.source,null);assert.equal(p.image,null);assert.equal(p.history,null);assert.equal(p.data.ready,false);
+ }finally{api.checkPreparedImage=original;}
 });
 test('rejected final composite never reaches album, temp export or preview',async()=>{
  const p=page();p.source={};p.image={};p.originalWidth=10;p.originalHeight=10;p.frame.enabled=false;
@@ -142,13 +145,32 @@ test('preset moderation locks replacement and edits until completion',async()=>{
 });
 
 test('image moderation exports the dedicated page canvas and preserves the full-size export',async()=>{
- const p=page();p.checkImage=definition.checkImage;
+ const p=page();p.checkImage=definition.checkImage;p.prepareDetection=definition.prepareDetection;
  const draws=[];const ctx={fillRect(){},drawImage(...args){draws.push(args);}};
  p.safetyCanvas={getContext:()=>ctx};p.exportCanvas={width:4000,height:3000};
  p.createCanvas=()=>assert.fail('offscreen canvas must not be used for detection export');
- const api=require('../miniprogram/utils/content-safety'),consent=api.consent,image=api.image;
- api.consent=async()=>{};api.image=async canvas=>{assert.equal(canvas,p.safetyCanvas);assert.equal(canvas.width,750);assert.equal(canvas.height,563);};
+ const api=require('../miniprogram/utils/content-safety'),prepare=api.prepareImage,check=api.checkPreparedImage;
+ api.checkPreparedImage=async()=>{};api.prepareImage=async canvas=>{assert.equal(canvas,p.safetyCanvas);assert.equal(canvas.width,750);assert.equal(canvas.height,563);};
  global.wx={showLoading(){},hideLoading(){}};
  try{await p.checkImage(p.exportCanvas,4000,3000);assert.equal(draws[0][0],p.exportCanvas);assert.equal(p.exportCanvas.width,4000);assert.equal(p.exportCanvas.height,3000);assert.equal(p.safetyCanvas.width,1);}
- finally{api.consent=consent;api.image=image;}
+ finally{api.prepareImage=prepare;api.checkPreparedImage=check;}
+});
+
+test('background check allows edits and export gate waits for the same result',async()=>{
+ const api=require('../miniprogram/utils/content-safety'),original=api.checkPreparedImage;
+ const p=page();p.source={};p.startPhotoCheck=definition.startPhotoCheck;p.ensurePhotoApproved=definition.ensurePhotoApproved;
+ let resolve,calls=0;api.checkPreparedImage=()=>{calls++;return new Promise(r=>resolve=r);};
+ global.wx={showLoading(){},hideLoading(){}};
+ try{
+  p._photoCheck={prepared:'one',passUntil:0};const pending=p.startPhotoCheck(p._photoCheck);
+  assert.equal(p.data.busy,false);p.applyPreset({currentTarget:{dataset:{key:'warm'}}});assert.equal(p.frame.caption,'微光快调 - 暖色');
+  let allowed=false;const gate=p.ensurePhotoApproved().then(()=>allowed=true);await Promise.resolve();assert.equal(allowed,false);assert.equal(calls,1);
+  resolve(Date.now()+600000);await pending;await gate;assert.equal(allowed,true);assert.equal(p.data.photoCheckStatus,'pass');
+ }finally{api.checkPreparedImage=original;}
+});
+test('failed source moderation blocks export before generating any output',async()=>{
+ const p=page();p.source={};p.originalWidth=10;p.originalHeight=10;
+ p.ensurePhotoApproved=async()=>{throw Object.assign(new Error(),{safety:'pending'});};
+ p.createCanvas=()=>assert.fail('must not generate');p.saveToAlbum=()=>assert.fail('must not save');
+ global.wx={showToast(){}};await p.exportPhoto();assert.equal(p.lastExport,undefined);assert.equal(p.data.exporting,false);
 });

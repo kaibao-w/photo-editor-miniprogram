@@ -11,7 +11,7 @@ async function consent() {
 }
 async function request(data,allowPending=false) {
   await consent();
-  let timer;
+  let timer;const started=Date.now();
   try {
     if(!wx.cloud)throw failure('unavailable');
     const response=await Promise.race([
@@ -29,7 +29,7 @@ async function request(data,allowPending=false) {
     if(error.safety)throw error;
     console.warn('contentSafety: request failed',{stage:data.kind,code:error.errCode||error.errno||'unknown'});
     throw failure('unavailable');
-  }finally{clearTimeout(timer);}
+  }finally{clearTimeout(timer);if(data.kind!=='poll')timing('request_'+data.kind,started);}
 }
 async function detecting(action){
   await consent();
@@ -37,39 +37,78 @@ async function detecting(action){
   try{return await action();}finally{finish();}
 }
 async function text(value) {if(value && value.trim())await detecting(()=>request({kind:'text',text:value}));}
-// Keep only two pending jobs so retrying the same image need not submit again.
-const pendingImages=new Map();
+// Cache exact detection bytes plus editing scope, only in this app session.
+const imageChecks=new Map();
+const PASS_TTL=10*60*1000,JOB_TTL=3500000,MAX_CACHE_BYTES=8*1024*1024;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function image(canvas) {return detecting(()=>detectImage(canvas));}
-async function detectImage(canvas) {
-  let path,stage='canvas_export';
-  try {
+function timing(stage,started,extra={}){console.info('contentSafety: timing',{stage,ms:Math.max(0,Date.now()-started),...extra});}
+function pollDelay(elapsed){return elapsed<3000?500:elapsed<10000?1000:3000;}
+function remember(key,record){
+  imageChecks.delete(key);imageChecks.set(key,record);
+  let bytes=0;for(const k of imageChecks.keys())bytes+=k.length*2;
+  while(imageChecks.size>4||bytes>MAX_CACHE_BYTES){const oldest=imageChecks.keys().next().value;bytes-=oldest.length*2;imageChecks.delete(oldest);}
+}
+async function prepareImage(canvas){
+  let path,stage='canvas_export';const started=Date.now();
+  try{
     const result=await call('canvasToTempFilePath',{canvas,fileType:'jpg',quality:.8,destWidth:canvas.width,destHeight:canvas.height});
-    path=result.tempFilePath;
-    stage='read_detection_file';
-    const fs=wx.getFileSystemManager();
-    const file=await new Promise((resolve,reject)=>fs.readFile({filePath:path,encoding:'base64',success:resolve,fail:reject}));
-    stage='submit_image';
-    let job=pendingImages.get(file.data);
-    if(!job||job.expires<Date.now()){
-      job=await request({kind:'image',base64:file.data},true);
-      if(job.status!=='pending'||typeof job.id!=='string')throw failure('unavailable');
-      if(pendingImages.size>=2)pendingImages.delete(pendingImages.keys().next().value);
-      job.expires=Date.now()+3500000;pendingImages.set(file.data,job);
+    path=result.tempFilePath;stage='read_detection_file';
+    const file=await new Promise((resolve,reject)=>wx.getFileSystemManager().readFile({filePath:path,encoding:'base64',success:resolve,fail:reject}));
+    return file.data;
+  }catch(error){
+    console.warn('contentSafety: image preparation failed',{stage,code:error.errCode||error.errno||'unknown'});
+    throw failure('unavailable');
+  }finally{
+    if(path)wx.getFileSystemManager().unlink({filePath:path,fail(){}});
+    timing('prepare_image',started);
+  }
+}
+async function checkPreparedImage(base64,{foreground=true,scope='',isCurrent=()=>true}={}){
+  const started=Date.now(),key=scope+'\0'+base64;
+  if(!isCurrent())throw failure('cancel');
+  await consent();
+  if(!isCurrent())throw failure('cancel');
+  let record=imageChecks.get(key);
+  if(record&&record.status==='pass'&&record.passUntil>Date.now()){
+    remember(key,record);timing('image_cache_hit',started);return record.passUntil;
+  }
+  const finish=foreground?loading.begin('安全检测中'):()=>{};
+  let polls=0;
+  try{
+    if(!record||record.expires<=Date.now()||(record.status==='pass'&&record.passUntil<=Date.now())){
+      record={status:'pending',expires:Date.now()+JOB_TTL};
+      // Share submission when two callers check the same image at the same time.
+      record.submission=request({kind:'image',base64},true).then(result=>{
+        if(result.status!=='pending'||typeof result.id!=='string')throw failure('unavailable');
+        record.id=result.id;return result;
+      });
+      remember(key,record);
     }
-    stage='poll_result';
-    const deadline=Date.now()+60000;
+    await record.submission;
+    const deadline=Date.now()+60000,pollStarted=Date.now();
     while(Date.now()<deadline){
-      const result=await request({kind:'poll',id:job.id},true);
-      if(result.status==='pass'){pendingImages.delete(file.data);return;}
-      await delay(2000);
+      if(!isCurrent())throw failure('cancel');
+      if(record.status==='blocked')throw failure('blocked');
+      if(record.status==='pass'&&record.passUntil>Date.now())return record.passUntil;
+      const result=await request({kind:'poll',id:record.id},true);polls++;
+      if(!isCurrent())throw failure('cancel');
+      if(result.status==='pass'){
+        record.status='pass';record.passUntil=Math.min(record.expires,Date.now()+PASS_TTL);
+        remember(key,record);return record.passUntil;
+      }
+      await delay(Math.min(pollDelay(Date.now()-pollStarted),Math.max(0,deadline-Date.now())));
     }
     throw failure('pending');
   }catch(error){
-    if(error.safety)throw error;
-    console.warn('contentSafety: image preparation failed',{stage,code:error.errCode||error.errno||'unknown',message:stage==='canvas_export'?String(error.errMsg||'').slice(0,240):undefined});
-    throw failure('unavailable');
-  }
-  finally{if(path)wx.getFileSystemManager().unlink({filePath:path,fail(){}});}
+    if(error.safety==='blocked')record.status='blocked';
+    // Keep pending tasks for retries, but never cache a service failure as approval.
+    if(error.safety!=='pending'&&error.safety!=='cancel'&&error.safety!=='blocked'&&imageChecks.get(key)===record)imageChecks.delete(key);
+    throw error;
+  }finally{finish();timing('image_check_total',started,{polls});}
 }
-module.exports={text,image,consent,failure};
+async function image(canvas,options){
+  await consent();
+  const base64=await prepareImage(canvas);
+  return checkPreparedImage(base64,options);
+}
+module.exports={text,image,prepareImage,checkPreparedImage,consent,failure,pollDelay,PASS_TTL};

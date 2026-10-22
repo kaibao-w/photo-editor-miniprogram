@@ -43,7 +43,7 @@ test('cloud timeout blocks operation even if late response passes',async t=>{
 test('temporary detection image is removed even on rejection',async()=>{
  let removed;
  global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,canvasToTempFilePath:o=>o.success({tempFilePath:'/temp.jpg'}),getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>{removed=o.filePath;}}),cloud:{callFunction:async()=>({result:{status:'blocked'}})}};
- await assert.rejects(safety.image({width:100,height:100}),e=>e.safety==='blocked');assert.equal(removed,'/temp.jpg');
+ await assert.rejects(safety.image({width:100,height:100},{scope:'blocked'}),e=>e.safety==='blocked');assert.equal(removed,'/temp.jpg');
 });
 
 test('verdict does not treat successful submission or malformed results as approval',()=>{
@@ -164,4 +164,27 @@ test('detection loading restores export loading without closing it early',()=>{
  const exportDone=loading.begin('正在生成图片'),checkDone=loading.begin('安全检测中');
  checkDone();exportDone();exportDone();
  assert.deepEqual(events,['正在生成图片','安全检测中','正在生成图片','hide']);
+});
+
+test('image approvals reuse exact bytes and scope, expire, and never cache unavailable',async()=>{
+ const safety=require('../miniprogram/utils/content-safety');let submissions=0,polls=0,fail=false;
+ global.wx={getStorageSync:()=>true,showLoading(){},hideLoading(){},cloud:{callFunction:async({data})=>{
+  if(data.kind==='image'){submissions++;return {result:{status:'pending',id:'job'}};}
+  polls++;return {result:{status:fail?'unavailable':'pass'}};
+ }}};
+ await safety.checkPreparedImage('cache-test',{scope:'first'});await safety.checkPreparedImage('cache-test',{scope:'first'});assert.equal(submissions,1);assert.equal(polls,1);
+ await safety.checkPreparedImage('cache-test',{scope:'changed-edit'});assert.equal(submissions,2);
+ const now=Date.now;Date.now=()=>now()+safety.PASS_TTL+1;
+ try{await safety.checkPreparedImage('cache-test',{scope:'changed-edit'});assert.equal(submissions,3);}finally{Date.now=now;}
+ fail=true;await assert.rejects(safety.checkPreparedImage('failed-cache'),e=>e.safety==='unavailable');
+ fail=false;await safety.checkPreparedImage('failed-cache');assert.equal(submissions,5);
+ assert.deepEqual([0,2999,3000,9999,10000].map(safety.pollDelay),[500,500,1000,1000,3000]);
+});
+
+test('cloud timing covers upload, submission and callback without private payloads',async()=>{
+ const m=memoryCloud(),logs=[],run=createHandler(m.cloud,(...args)=>logs.push(args),env);
+ const job=await run(image);await run(callback(message));await run({kind:'poll',id:job.id});
+ const timings=logs.filter(([name])=>name==='contentSafety: timing').map(([,data])=>data);
+ for(const stage of ['upload','api_submission','submission_total','callback_latency','callback_discovery'])assert(timings.some(row=>row.stage===stage&&row.ms>=0));
+ const serialized=JSON.stringify(logs);for(const secret of [image.base64,env.WECHAT_CALLBACK_TOKEN,env.WECHAT_CALLBACK_AES_KEY,'https://temporary.example'])assert(!serialized.includes(secret));
 });

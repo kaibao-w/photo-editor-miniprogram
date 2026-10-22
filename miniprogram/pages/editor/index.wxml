@@ -8,6 +8,10 @@
   </view>
   <view class="stage" style="height:{{stageHeight}}px">
     <view class="preview-surface">
+      <view wx:if="{{ready && photoCheckStatus !== 'pass'}}" class="photo-check-status">
+        <text>{{photoCheckStatus === 'pending' ? '安全检测中，可先调色' : '检测暂未完成，保存前需通过检测'}}</text>
+        <text wx:if="{{photoCheckStatus === 'retry'}}" class="photo-check-retry" bindtap="retryPhotoCheck">重试</text>
+      </view>
     <canvas type="2d" id="preview" class="preview {{ready ? '' : 'canvas-idle'}}" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
     <view class="empty" wx:if="{{!ready}}"><view class="empty-title">从一张照片开始</view><text>选择相册图片或拍一张照片</text><button class="primary" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">选择图片</button></view>
     </view>

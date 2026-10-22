@@ -10,6 +10,7 @@ function verdict(result){
 }
 function createHandler(cloud,log=console.warn,env=process.env){
  const reject=(reason,details={})=>{log('contentSafety: rejected',{reason,...details});return unavailable();};
+ const timing=(stage,started)=>log('contentSafety: timing',{stage,ms:Math.max(0,Date.now()-started)});
  const db=()=>cloud.database();
  const jobs=()=>db().collection('content_safety_jobs');
  const receipts=()=>db().collection('content_safety_receipts');
@@ -29,7 +30,7 @@ function createHandler(cloud,log=console.warn,env=process.env){
      if(verified.echo!==undefined)return {statusCode:200,headers:{'Content-Type':'text/plain'},body:verified.echo};
      const message=verified.message;
      // First authenticated result wins; duplicate deliveries cannot overwrite it.
-     try{await receipts().add({data:{_id:message.trace_id,status:verdict(message),expiresAt:Date.now()+2*3600000}});}
+     try{await receipts().add({data:{_id:message.trace_id,status:verdict(message),receivedAt:Date.now(),expiresAt:Date.now()+2*3600000}});}
      catch(error){if(!await read(receipts(),message.trace_id))throw error;}
      return {statusCode:200,headers:{'Content-Type':'text/plain'},body:'success'};
     }catch(error){
@@ -58,6 +59,8 @@ function createHandler(cloud,log=console.warn,env=process.env){
     const receipt=await read(receipts(),job.traceID);
     if(!receipt)return {status:'pending'};
     await jobs().doc(event.id).update({data:{status:receipt.status}});
+    if(receipt.receivedAt&&job.submittedAt)log('contentSafety: timing',{stage:'callback_latency',ms:Math.max(0,receipt.receivedAt-job.submittedAt)});
+    if(receipt.receivedAt)timing('callback_discovery',receipt.receivedAt);
     try{await removeFile(job.fileID);await jobs().doc(event.id).update({data:{fileID:''}});}catch(error){log('contentSafety: cleanup deferred');}
     return {status:receipt.status};
    }
@@ -67,16 +70,21 @@ function createHandler(cloud,log=console.warn,env=process.env){
     if(typeof event.base64!=='string'||event.base64.length>1400000||!/^[A-Za-z0-9+/]+={0,2}$/.test(event.base64))return reject('image_base64',{type:typeof event.base64,length:typeof event.base64==='string'?event.base64.length:0});
     const value=Buffer.from(event.base64,'base64');if(!value.length||value.length>1000000||value[0]!==255||value[1]!==216)return reject('image_format_or_size',{bytes:value.length,isJpeg:value[0]===255&&value[1]===216});
     const id=crypto.randomBytes(16).toString('hex'),expiresAt=Date.now()+3600000;
+    const started=Date.now();
     const upload=await cloud.uploadFile({cloudPath:'content-safety/'+id+'.jpg',fileContent:value});
+    timing('upload',started);
     try{
      await jobs().doc(id).set({data:{owner:OPENID,fileID:upload.fileID,status:'pending',expiresAt}});
      const urls=await cloud.getTempFileURL({fileList:[{fileID:upload.fileID,maxAge:3600}]});
      const url=urls.fileList&&urls.fileList[0]&&urls.fileList[0].tempFileURL;
      if(!url)throw new Error('missing temporary URL');
+     const submittedAt=Date.now();
      const result=await cloud.openapi.security.mediaCheckAsync({openid:OPENID,scene:4,version:2,mediaType:2,mediaUrl:url});
+     timing('api_submission',submittedAt);
      const traceID=result&&(result.traceId||result.trace_id);
      if(codeOf(result)!==0||typeof traceID!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(traceID)){log('contentSafety: submission rejected',{code:codeOf(result),hasTraceId:!!traceID});throw new Error('invalid submission');}
-     await jobs().doc(id).update({data:{traceID}});
+     await jobs().doc(id).update({data:{traceID,submittedAt}});
+     timing('submission_total',started);
      return {status:'pending',id};
     }catch(error){try{await removeFile(upload.fileID);await jobs().doc(id).remove();}catch(cleanupError){log('contentSafety: cleanup deferred');}throw error;}
    }

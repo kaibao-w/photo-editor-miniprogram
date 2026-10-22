@@ -12,7 +12,7 @@ const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 const editor = {
   data: {
-    savedPresets:[],selectedPresetId:'',
+    savedPresets:[],selectedPresetId:'',photoCheckStatus:'',
     ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
@@ -49,7 +49,7 @@ const editor = {
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
     for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
-    this.source = this.image = null;
+    this.source = this.image = this._photoCheck = null;
   },
   onHide(){this.compareEnd();},
   onResize() { if(this.canvas) this.measure(); },
@@ -88,14 +88,53 @@ const editor = {
     await this.checkText(row.name);
     await this.checkText(row.frame && row.frame.caption);
   },
-  async checkImage(image,width,height){
+  async prepareDetection(image,width,height){
     const scale=Math.min(1,750/width,750/height);
     // wx.canvasToTempFilePath requires a page Canvas component, not OffscreenCanvas.
     const canvas=this.safetyCanvas;
     if(!canvas){console.warn('contentSafety: safety_canvas_missing');throw contentSafety.failure('unavailable');}
     canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
-    try{const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);await contentSafety.image(canvas);}
+    try{const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);return await contentSafety.prepareImage(canvas);}
     finally{canvas.width=canvas.height=1;}
+  },
+  async checkImage(image,width,height,options){
+    const prepared=await this.prepareDetection(image,width,height);
+    return contentSafety.checkPreparedImage(prepared,options);
+  },
+  startPhotoCheck(record){
+    if(record.promise)return record.promise;
+    if(!this._alive||this._photoCheck!==record)return Promise.resolve(false);
+    this.setData({photoCheckStatus:'pending'});
+    record.promise=(async()=>{
+      try{
+        const passUntil=await contentSafety.checkPreparedImage(record.prepared,{foreground:false,isCurrent:()=>this._alive&&this._photoCheck===record});
+        if(!this._alive||this._photoCheck!==record)return false;
+        record.passUntil=passUntil;record.error=null;
+        this.setData({photoCheckStatus:'pass'});return true;
+      }catch(error){
+        if(!this._alive||this._photoCheck!==record)return false;
+        record.error=error;record.passUntil=0;
+        if(error.safety==='blocked'){
+          this.source=this.image=this.history=null;this.slider=this.gesture=null;this._captionDraft=undefined;
+          this.setData({ready:false,photoCheckStatus:'blocked',history:[],canUndo:false,canRedo:false,comparing:false});this.drawView();
+          if(!this.data.exporting)this.error(error);
+        }else if(error.safety!=='cancel')this.setData({photoCheckStatus:'retry'});
+        return false;
+      }finally{record.promise=null;}
+    })();
+    return record.promise;
+  },
+  retryPhotoCheck(){if(this.source&&!this.data.busy&&this._photoCheck)this.startPhotoCheck(this._photoCheck);},
+  async ensurePhotoApproved(){
+    const record=this._photoCheck;
+    if(!record)throw contentSafety.failure('unavailable');
+    if(record.passUntil>Date.now())return;
+    const finish=loading.begin('安全检测中');
+    try{
+      const passed=await this.startPhotoCheck(record);
+      if(!this._alive||this._photoCheck!==record)throw contentSafety.failure('cancel');
+      if(!passed)throw record.error||contentSafety.failure('unavailable');
+    }finally{finish();}
   },
   state() {return {values:{...this.values},frame:{...this.frame}};},
   sync() {
@@ -158,14 +197,17 @@ const editor = {
       const scale=Math.min(1,1200/Math.max(w,h));const pw=Math.max(1,Math.round(w*scale)),ph=Math.max(1,Math.round(h*scale));
       const scratch=this.createCanvas(pw,ph),c=scratch.getContext('2d');c.drawImage(image,0,0,pw,ph);
       const pixels=c.getImageData(0,0,pw,ph);scratch.width=scratch.height=1;
-      await this.checkImage(image,w,h);
+      await contentSafety.consent();
+      const prepared=await this.prepareDetection(image,w,h);
       if(!this._alive)return;
       this._captionDraft=undefined;
+      this._photoCheck={prepared,passUntil:0};
       this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;
       this.initializePhotoEdits();
       if(this.pendingPreset){const row=this.pendingPreset;this.pendingPreset=null;this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.setData({selectedPresetId:row.id});this.history.record(this.state(),'预设 · '+row.name);}
       this.setData({ready:true,comparing:false,tab:'presets'});
       this.sync();this.syncHistory();this.render();this.fitView();
+      this.startPhotoCheck(this._photoCheck);
     } catch(error) {
       if(String(error.errMsg||'').includes('cancel')) return;
       if(isPrivacyScopeError(error)) console.warn('选取图片失败：微信隐私指引缺少对应声明',error);
@@ -214,10 +256,10 @@ const editor = {
   async captionBlur(){
     if(this._captionPromise)return this._captionPromise;
     if(this._captionDraft===undefined)return true;
-    const caption=this._captionDraft;this._captionDraft=undefined;
+    const photoCheck=this._photoCheck,caption=this._captionDraft;this._captionDraft=undefined;
     this.setData({busy:true});
     this._captionPromise=(async()=>{
-      try{await this.checkText(caption);if(!this._alive)return false;this.frame.caption=caption;this.edit('画框 · 底部文字');return true;}
+      try{await this.checkText(caption);if(!this._alive||this._photoCheck!==photoCheck||!this.source)return false;this.frame.caption=caption;this.edit('画框 · 底部文字');return true;}
       catch(error){if(this._alive){this.setData({'frame.caption':this.frame.caption});this.error(error,'文字暂时无法使用');}return false;}
       finally{this._captionPromise=null;if(this._alive)this.setData({busy:false});}
     })();
@@ -269,6 +311,8 @@ const editor = {
     const state=this.state(),type=this.data.formatIndex?'png':'jpg';
     const size=exportSize(this.originalWidth,this.originalHeight,true);let photo,finishLoading;
     try {
+      await this.ensurePhotoApproved();
+      if(!this._alive||!this.source)return;
       await this.checkText(state.frame.caption);
       finishLoading=loading.begin('正在生成图片');await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
@@ -276,7 +320,7 @@ const editor = {
       for(let y=0;y<size.height;y+=128){const h=Math.min(128,size.height-y);pc.putImageData(grade(pc.getImageData(0,y,size.width,h),state.values),0,y);await pause();if(!this._alive)return;}
       this.exportCanvas.width=size.width;this.exportCanvas.height=size.height;const out=this.exportCanvas.getContext('2d');
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);
-      await this.checkImage(this.exportCanvas,size.width,size.height);
+      await this.checkImage(this.exportCanvas,size.width,size.height,{scope:JSON.stringify({state,width:this.originalWidth,height:this.originalHeight}),isCurrent:()=>this._alive});
       if(!this._alive)return;
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
       if(finishLoading)finishLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
