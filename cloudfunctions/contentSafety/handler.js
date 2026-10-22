@@ -9,6 +9,7 @@ function verdict(result){
  return code===0&&suggest==='pass'?'pass':'unavailable';
 }
 function createHandler(cloud,log=console.warn,env=process.env){
+ const reject=(reason,details={})=>{log('contentSafety: rejected',{reason,...details});return unavailable();};
  const db=()=>cloud.database();
  const jobs=()=>db().collection('content_safety_jobs');
  const receipts=()=>db().collection('content_safety_receipts');
@@ -31,11 +32,16 @@ function createHandler(cloud,log=console.warn,env=process.env){
      try{await receipts().add({data:{_id:message.trace_id,status:verdict(message),expiresAt:Date.now()+2*3600000}});}
      catch(error){if(!await read(receipts(),message.trace_id))throw error;}
      return {statusCode:200,headers:{'Content-Type':'text/plain'},body:'success'};
-    }catch(error){log('contentSafety: callback rejected');return {statusCode:403,body:'rejected'};}
+    }catch(error){
+     const reasons=['callback token not configured','callback aes key not configured','invalid callback timestamp','invalid signature','invalid method','invalid body','invalid encrypted signature','invalid key','invalid padding','invalid payload','invalid length','invalid appid','invalid event'];
+     const q=event.queryStringParameters||event.queryString||{};
+     log('contentSafety: callback rejected',{reason:reasons.includes(error.message)?error.message:'callback_processing_failed',method:event.httpMethod,hasToken:!!env.WECHAT_CALLBACK_TOKEN,aesKeyLength:(env.WECHAT_CALLBACK_AES_KEY||'').length,hasTimestamp:!!q.timestamp,hasNonce:!!q.nonce,hasSignature:!!(q.signature||q.msg_signature)});
+     return {statusCode:403,body:'rejected'};
+    }
    }
    const {OPENID,APPID:caller}=cloud.getWXContext();
    if(event&&event.Type==='Timer'&&!OPENID){await cleanup();return {status:'cleaned'};}
-   if(!OPENID||caller!==APPID)return unavailable();
+   if(!OPENID||caller!==APPID)return reject('caller_identity',{hasOpenid:!!OPENID,hasAppid:!!caller,appidMatches:caller===APPID});
    if(event&&event.kind==='text'){
     if(typeof event.text!=='string'||event.text.length>2000)return unavailable();
     if(!event.text.trim())return {status:'pass'};
@@ -57,9 +63,9 @@ function createHandler(cloud,log=console.warn,env=process.env){
    }
    if(event&&event.kind==='image'){
     // Require callback setup before accepting uploads. Never accept client URLs/results.
-    if(!env.WECHAT_CALLBACK_TOKEN||!env.WECHAT_CALLBACK_AES_KEY)return unavailable();
-    if(typeof event.base64!=='string'||event.base64.length>1400000||!/^[A-Za-z0-9+/]+={0,2}$/.test(event.base64))return unavailable();
-    const value=Buffer.from(event.base64,'base64');if(!value.length||value.length>1000000||value[0]!==255||value[1]!==216)return unavailable();
+    if(!env.WECHAT_CALLBACK_TOKEN||!env.WECHAT_CALLBACK_AES_KEY||env.WECHAT_CALLBACK_AES_KEY.length!==43)return reject('callback_configuration',{hasToken:!!env.WECHAT_CALLBACK_TOKEN,hasAesKey:!!env.WECHAT_CALLBACK_AES_KEY,aesKeyLength:(env.WECHAT_CALLBACK_AES_KEY||'').length});
+    if(typeof event.base64!=='string'||event.base64.length>1400000||!/^[A-Za-z0-9+/]+={0,2}$/.test(event.base64))return reject('image_base64',{type:typeof event.base64,length:typeof event.base64==='string'?event.base64.length:0});
+    const value=Buffer.from(event.base64,'base64');if(!value.length||value.length>1000000||value[0]!==255||value[1]!==216)return reject('image_format_or_size',{bytes:value.length,isJpeg:value[0]===255&&value[1]===216});
     const id=crypto.randomBytes(16).toString('hex'),expiresAt=Date.now()+3600000;
     const upload=await cloud.uploadFile({cloudPath:'content-safety/'+id+'.jpg',fileContent:value});
     try{
@@ -69,7 +75,7 @@ function createHandler(cloud,log=console.warn,env=process.env){
      if(!url)throw new Error('missing temporary URL');
      const result=await cloud.openapi.security.mediaCheckAsync({openid:OPENID,scene:4,version:2,mediaType:2,mediaUrl:url});
      const traceID=result&&(result.traceId||result.trace_id);
-     if(codeOf(result)!==0||typeof traceID!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(traceID))throw new Error('invalid submission');
+     if(codeOf(result)!==0||typeof traceID!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(traceID)){log('contentSafety: submission rejected',{code:codeOf(result),hasTraceId:!!traceID});throw new Error('invalid submission');}
      await jobs().doc(id).update({data:{traceID}});
      return {status:'pending',id};
     }catch(error){try{await removeFile(upload.fileID);await jobs().doc(id).remove();}catch(cleanupError){log('contentSafety: cleanup deferred');}throw error;}

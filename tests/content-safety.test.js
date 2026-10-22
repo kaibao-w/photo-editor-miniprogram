@@ -114,3 +114,31 @@ test('plain or forged callback cannot publish a result',async()=>{
  const response=await run({httpMethod:'POST',body:JSON.stringify(message),queryStringParameters:{}});
  assert.equal(response.statusCode,403);assert.equal((await run({kind:'poll',id:job.id})).status,'pending');
 });
+
+test('early image rejection logs configuration presence without secrets or image data',async()=>{
+ const m=memoryCloud(),logs=[],run=createHandler(m.cloud,(...args)=>logs.push(args),{WECHAT_CALLBACK_TOKEN:'private-token'});
+ assert.equal((await run(image)).status,'unavailable');
+ assert.deepEqual(logs[0][1],{reason:'callback_configuration',hasToken:true,hasAesKey:false,aesKeyLength:0});
+ assert(!JSON.stringify(logs).includes('private-token'));assert(!JSON.stringify(logs).includes(image.base64));
+ const identity=[];m.setOwner(undefined);
+ assert.equal((await createHandler(m.cloud,(...args)=>identity.push(args),env)(image)).status,'unavailable');
+ assert.equal(identity[0][1].reason,'caller_identity');assert.equal(identity[0][1].hasOpenid,false);
+});
+
+test('URL verification echoes valid challenge without requiring AES key; POST still requires AES',()=>{
+ const timestamp=String(Math.floor(Date.now()/1000)),nonce='verification',echostr='wx-url-test';
+ const signature=crypto.createHash('sha1').update([env.WECHAT_CALLBACK_TOKEN,timestamp,nonce].sort().join('')).digest('hex');
+ const tokenOnly={WECHAT_CALLBACK_TOKEN:env.WECHAT_CALLBACK_TOKEN};
+ for(const field of ['queryStringParameters','queryString']){
+  const event={httpMethod:'GET',[field]:{timestamp,nonce,echostr,signature}};
+  assert.deepEqual(verify(event,tokenOnly),{echo:echostr});
+  event[field].signature='0'.repeat(40);assert.throws(()=>verify(event,tokenOnly),/invalid signature/);
+ }
+ assert.throws(()=>verify(callback(message),tokenOnly),/aes key not configured/);
+});
+test('callback rejection identifies missing token without exposing request or key values',async()=>{
+ const m=memoryCloud(),logs=[],run=createHandler(m.cloud,(...args)=>logs.push(args),{});
+ const result=await run(callback(message));assert.equal(result.statusCode,403);
+ assert.equal(logs[0][1].reason,'callback token not configured');
+ assert(!JSON.stringify(logs).includes(env.WECHAT_CALLBACK_TOKEN));assert(!JSON.stringify(logs).includes(env.WECHAT_CALLBACK_AES_KEY));
+});

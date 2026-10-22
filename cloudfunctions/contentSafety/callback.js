@@ -4,14 +4,15 @@ function digest(parts){return crypto.createHash('sha1').update(parts.sort().join
 function equal(a,b){return typeof a==='string'&&typeof b==='string'&&a.length===b.length&&crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b));}
 function verify(event,env=process.env,now=Date.now()){
  const token=env.WECHAT_CALLBACK_TOKEN,keyText=env.WECHAT_CALLBACK_AES_KEY;
- if(!token||!keyText||keyText.length!==43)throw new Error('callback not configured');
- const q=event.queryStringParameters||{};
+ if(!token)throw new Error('callback token not configured');
+ const q=event.queryStringParameters||event.queryString||{};
  if(!/^\d+$/.test(String(q.timestamp||''))||Math.abs(now/1000-Number(q.timestamp))>300||typeof q.nonce!=='string')throw new Error('invalid callback timestamp');
  if(event.httpMethod==='GET'){
   if(!equal(q.signature,digest([token,q.timestamp,q.nonce])))throw new Error('invalid signature');
   return {echo:String(q.echostr||'')};
  }
  if(event.httpMethod!=='POST')throw new Error('invalid method');
+ if(!keyText||keyText.length!==43)throw new Error('callback aes key not configured');
  const raw=event.isBase64Encoded?Buffer.from(event.body||'','base64').toString('utf8'):event.body;
  if(typeof raw!=='string'||raw.length>100000)throw new Error('invalid body');
  let encrypted;
