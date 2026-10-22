@@ -26,7 +26,11 @@ const editor = {
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
   onShow(){this.refreshPresets();},
-  onShareAppMessage(){return {title:'微光快调 · 图片调色',path:'/pages/editor/index'};},
+  onShareAppMessage(){
+    const covers=['photography','comparison','glow','film'];
+    const cover=covers[Math.floor(Math.random()*covers.length)];
+    return {title:'微光快调 · 图片调色',path:'/pages/editor/index',imageUrl:'/assets/share/'+cover+'.jpg'};
+  },
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this._alive = false; clearTimeout(this._timer);
