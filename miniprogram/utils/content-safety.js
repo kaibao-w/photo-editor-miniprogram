@@ -1,3 +1,4 @@
+const loading=require('./loading');
 const ENV = 'cloud1-d9gnhap66f1142761';
 const CONSENT = 'contentSafetyConsent.v2';
 const call = (name,args={}) => new Promise((resolve,reject)=>wx[name]({...args,success:resolve,fail:reject}));
@@ -30,11 +31,17 @@ async function request(data,allowPending=false) {
     throw failure('unavailable');
   }finally{clearTimeout(timer);}
 }
-async function text(value) {if(value && value.trim())await request({kind:'text',text:value});}
+async function detecting(action){
+  await consent();
+  const finish=loading.begin('安全检测中');
+  try{return await action();}finally{finish();}
+}
+async function text(value) {if(value && value.trim())await detecting(()=>request({kind:'text',text:value}));}
 // Keep only two pending jobs so retrying the same image need not submit again.
 const pendingImages=new Map();
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function image(canvas) {
+async function image(canvas) {return detecting(()=>detectImage(canvas));}
+async function detectImage(canvas) {
   let path,stage='canvas_export';
   try {
     const result=await call('canvasToTempFilePath',{canvas,fileType:'jpg',quality:.8,destWidth:canvas.width,destHeight:canvas.height});

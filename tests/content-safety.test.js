@@ -22,27 +22,27 @@ test('missing authentication, invalid images and oversized text never reach API'
 });
 test('client only accepts explicit pass; raw provider errors are not exposed',async()=>{
  for(const result of [null,{}, {status:'unavailable'},{status:'blocked'}]){
-  global.wx={getStorageSync:()=>true,cloud:{callFunction:async()=>({result})}};
+  global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,cloud:{callFunction:async()=>({result})}};
   await assert.rejects(safety.text('hello'),e=>e.safety===(result&&result.status==='blocked'?'blocked':'unavailable')&&e.message==='Content safety');
  }
- global.wx={getStorageSync:()=>true,cloud:{callFunction:async()=>({result:{status:'pass'}})}};
+ global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,cloud:{callFunction:async()=>({result:{status:'pass'}})}};
  await safety.text('hello');
 });
 test('declining consent prevents cloud calls',async()=>{
  let requested=false;
- global.wx={getStorageSync:()=>false,showModal:o=>o.success({confirm:false}),cloud:{callFunction:async()=>{requested=true;}}};
+ global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>false,showModal:o=>o.success({confirm:false}),cloud:{callFunction:async()=>{requested=true;}}};
  await assert.rejects(safety.text('hello'),e=>e.safety==='cancel');assert.equal(requested,false);
 });
 test('cloud timeout blocks operation even if late response passes',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});let resolve;
- global.wx={getStorageSync:()=>true,cloud:{callFunction:()=>new Promise(r=>resolve=r)}};
+ global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,cloud:{callFunction:()=>new Promise(r=>resolve=r)}};
  const promise=safety.text('hello');const rejected=assert.rejects(promise,e=>e.safety==='unavailable');
- await Promise.resolve();await Promise.resolve();t.mock.timers.tick(25001);await rejected;
+ await new Promise(resolve=>setImmediate(resolve));t.mock.timers.tick(25001);await rejected;
  resolve({result:{status:'pass'}});
 });
 test('temporary detection image is removed even on rejection',async()=>{
  let removed;
- global.wx={getStorageSync:()=>true,canvasToTempFilePath:o=>o.success({tempFilePath:'/temp.jpg'}),getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>{removed=o.filePath;}}),cloud:{callFunction:async()=>({result:{status:'blocked'}})}};
+ global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,canvasToTempFilePath:o=>o.success({tempFilePath:'/temp.jpg'}),getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>{removed=o.filePath;}}),cloud:{callFunction:async()=>({result:{status:'blocked'}})}};
  await assert.rejects(safety.image({width:100,height:100}),e=>e.safety==='blocked');assert.equal(removed,'/temp.jpg');
 });
 
@@ -106,7 +106,7 @@ test('early callback is retained, review blocks, and expired jobs are cleaned',a
 
 test('client polls pending image instead of treating submission as pass',async()=>{
  const kinds=[];let removed;
- global.wx={getStorageSync:()=>true,canvasToTempFilePath:o=>o.success({tempFilePath:'/async.jpg'}),getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>removed=o.filePath}),cloud:{callFunction:async({data})=>{kinds.push(data.kind);return {result:data.kind==='image'?{status:'pending',id:'job'}:{status:'pass'}};}}};
+ global.wx={showLoading(){},hideLoading(){},getStorageSync:()=>true,canvasToTempFilePath:o=>o.success({tempFilePath:'/async.jpg'}),getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>removed=o.filePath}),cloud:{callFunction:async({data})=>{kinds.push(data.kind);return {result:data.kind==='image'?{status:'pending',id:'job'}:{status:'pass'}};}}};
  await safety.image({width:10,height:10});assert.deepEqual(kinds,['image','poll']);assert.equal(removed,'/async.jpg');
 });
 test('plain or forged callback cannot publish a result',async()=>{
@@ -141,4 +141,27 @@ test('callback rejection identifies missing token without exposing request or ke
  const result=await run(callback(message));assert.equal(result.statusCode,403);
  assert.equal(logs[0][1].reason,'callback token not configured');
  assert(!JSON.stringify(logs).includes(env.WECHAT_CALLBACK_TOKEN));assert(!JSON.stringify(logs).includes(env.WECHAT_CALLBACK_AES_KEY));
+});
+
+test('overlapping checks keep loading until the last operation settles, including rejection',async()=>{
+ const events=[],requests=[];
+ global.wx={getStorageSync:()=>true,showLoading:o=>events.push(o),hideLoading:()=>events.push('hide'),cloud:{callFunction:()=>new Promise(resolve=>requests.push(resolve))}};
+ const first=safety.text('one'),second=safety.text('two');
+ const rejected=assert.rejects(second,e=>e.safety==='blocked');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(events,[{title:'安全检测中',mask:true}]);
+ requests[0]({result:{status:'pass'}});await first;assert.equal(events.length,1);
+ requests[1]({result:{status:'blocked'}});await rejected;assert.equal(events.at(-1),'hide');
+});
+test('blank text and declined consent never open loading',async()=>{
+ const events=[];
+ global.wx={getStorageSync:()=>false,showModal:o=>o.success({confirm:false}),showLoading:()=>events.push('show'),hideLoading:()=>events.push('hide')};
+ await safety.text(' ');await assert.rejects(safety.text('hello'),e=>e.safety==='cancel');assert.deepEqual(events,[]);
+});
+test('detection loading restores export loading without closing it early',()=>{
+ const events=[],loading=require('../miniprogram/utils/loading');
+ global.wx={showLoading:o=>events.push(o.title),hideLoading:()=>events.push('hide')};
+ const exportDone=loading.begin('正在生成图片'),checkDone=loading.begin('安全检测中');
+ checkDone();exportDone();exportDone();
+ assert.deepEqual(events,['正在生成图片','安全检测中','正在生成图片','hide']);
 });

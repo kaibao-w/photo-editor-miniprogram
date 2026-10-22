@@ -1,3 +1,4 @@
+const loading=require('../../utils/loading');
 const contentSafety=require('../../utils/content-safety');
 const savedPresets=require('../../utils/presets');
 const config = require('../../utils/config');
@@ -82,8 +83,8 @@ const editor = {
     const canvas=this.safetyCanvas;
     if(!canvas){console.warn('contentSafety: safety_canvas_missing');throw contentSafety.failure('unavailable');}
     canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
-    try{await contentSafety.consent();wx.showLoading({title:'正在检测内容',mask:true});const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);await contentSafety.image(canvas);}
-    finally{wx.hideLoading();canvas.width=canvas.height=1;}
+    try{const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,canvas.width,canvas.height);c.drawImage(image,0,0,canvas.width,canvas.height);await contentSafety.image(canvas);}
+    finally{canvas.width=canvas.height=1;}
   },
   state() {return {values:{...this.values},frame:{...this.frame}};},
   sync() {
@@ -255,22 +256,21 @@ const editor = {
     if(!await this.captionBlur() || !this._alive || this.data.busy)return;
     this.setData({busy:true,exporting:true});
     const state=this.state(),type=this.data.formatIndex?'png':'jpg';
-    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo;
+    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo,finishLoading;
     try {
       await this.checkText(state.frame.caption);
-      wx.showLoading({title:'正在生成图片',mask:true});await pause();
+      finishLoading=loading.begin('正在生成图片');await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
       if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}pc.drawImage(this.image,0,0,size.width,size.height);
       for(let y=0;y<size.height;y+=128){const h=Math.min(128,size.height-y);pc.putImageData(grade(pc.getImageData(0,y,size.width,h),state.values),0,y);await pause();if(!this._alive)return;}
       this.exportCanvas.width=size.width;this.exportCanvas.height=size.height;const out=this.exportCanvas.getContext('2d');
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);
-      wx.showLoading({title:'正在检测内容',mask:true});
       await this.checkImage(this.exportCanvas,size.width,size.height);
       if(!this._alive)return;
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
-      wx.hideLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
-    }catch(error){this.error(error,'导出失败，请使用较小的图片重试');}
-    finally {wx.hideLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false,exporting:false});}
+      if(finishLoading)finishLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
+    }catch(error){if(finishLoading)finishLoading();this.error(error,'导出失败，请使用较小的图片重试');}
+    finally {if(finishLoading)finishLoading();if(photo)photo.width=photo.height=1;if(this.exportCanvas)this.exportCanvas.width=this.exportCanvas.height=1;if(this._alive)this.setData({busy:false,exporting:false});}
   },
   async saveToAlbum(path){
     try {await call('saveImageToPhotosAlbum',{filePath:path});wx.showToast({title:'已保存到相册'});}
