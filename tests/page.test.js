@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const config=require('../miniprogram/utils/config'),History=require('../miniprogram/utils/history');
 let definition;global.Page=p=>definition=p;require('../miniprogram/pages/editor/index');delete global.Page;
-function page(){const p={...definition,data:JSON.parse(JSON.stringify(definition.data)),setData(v,cb){Object.assign(this.data,v);if(cb)cb();}};p.values=config.defaults();p.frame={...config.frameDefaults};p.history=new History(p.state());p._alive=true;p.schedule=()=>{};p.view={zoom:1,x:0,y:0};p.rect={width:400,height:300};return p;}
+function page(){const p={...definition,data:JSON.parse(JSON.stringify(definition.data)),setData(v,cb){Object.assign(this.data,v);if(cb)cb();}};p.values=config.defaults();p.frame={...config.frameDefaults};p.history=new History(p.state());p._alive=true;p.schedule=()=>{};p.checkText=async()=>{};p.checkImage=async()=>{};p.view={zoom:1,x:0,y:0};p.rect={width:400,height:300};return p;}
 test('vertical scroll does not edit; horizontal drag commits once',()=>{const p=page();p.source={};p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:12,clientY:40}]});p.sliderEnd();assert.equal(p.values.exposure,0);assert.equal(p.history.items.length,1);p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:60,clientY:11}]});assert(p.values.exposure>0);assert.equal(p.history.items.length,1);p.sliderEnd();assert.equal(p.history.items.length,2);p.undo();assert.equal(p.values.exposure,0);});
 test('cancelled frame gesture restores original value',()=>{const p=page();p.source={};p.data.tab='frame';p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:90,clientY:11}]});assert.notEqual(p.frame.size,83);p.sliderCancel();assert.equal(p.frame.size,83);assert.equal(p.history.items.length,1);});
 test('hold comparison preserves frame, releases on end/cancel and on page hide',()=>{const p=page();p.source={};let renders=0;p.render=()=>renders++;p.frame.caption='山间';p.values.contrast=20;const before=p.state();p.compareStart();assert.equal(p.data.comparing,true);assert.deepEqual(p.state(),before);p.compareEnd();assert.equal(p.data.comparing,false);assert.equal(renders,2);p.compareEnd();assert.equal(renders,2);p.compareStart();p.onHide();assert.equal(p.data.comparing,false);assert.deepEqual(p.state(),before);assert.equal(p.history.items.length,1);p.data.busy=true;p.compareStart();assert.equal(p.data.comparing,false);p.data.busy=false;p.source=null;p.compareStart();assert.equal(p.data.comparing,false);});
@@ -56,7 +56,7 @@ test('saving a preset always includes frame state and caption; applying restores
  await p.savePreset();
  assert.deepEqual(rows[0].frame,p.frame);assert.deepEqual(rows[0].values,p.values);
  p.frame={...config.frameDefaults,caption:'其他'};
- p.applySavedPreset({currentTarget:{dataset:{id:rows[0].id}}});
+ await p.applySavedPreset({currentTarget:{dataset:{id:rows[0].id}}});
  assert.equal(p.frame.enabled,false);assert.equal(p.frame.caption,'旅途');
 });
 
@@ -92,4 +92,51 @@ test('large photo exports automatically at safe dimensions without confirmation'
  let exported,saved;p.saveToAlbum=async path=>{saved=path;};
  global.wx={showModal(){assert.fail('Export must not request size confirmation');},showLoading(){},hideLoading(){},canvasToTempFilePath(o){exported=o;o.success({tempFilePath:'/tmp/export.jpg'});}};
  await p.exportPhoto();assert.equal(exported.destWidth,4000);assert.equal(exported.destHeight,3000);assert.equal(exported.quality,.95);assert.equal(saved,'/tmp/export.jpg');assert.equal(p.data.busy,false);
+});
+
+const safetyFailure=()=>Object.assign(new Error('private provider data'),{safety:'blocked'});
+test('caption remains unrendered until approved; rejected text never enters history',async()=>{
+ const p=page();p.source={};p.frame.caption='old';let resolve;
+ p.checkText=()=>new Promise(r=>resolve=r);global.wx={showToast(){}};
+ p.captionInput({detail:{value:'new'}});assert.equal(p.frame.caption,'old');
+ const pending=p.captionBlur();assert.equal(p.data.busy,true);assert.equal(p.frame.caption,'old');
+ resolve();await pending;assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,2);
+ p.checkText=async()=>{throw safetyFailure();};p.captionInput({detail:{value:'blocked'}});
+ assert.equal(await p.captionBlur(),false);assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,2);assert.equal(p.data.busy,false);
+});
+test('rejected replacement keeps old image and history',async()=>{
+ const p=page();p.canvas={};const old={};p.source=old;p.image=old;const history=p.history;
+ p.photo={createImage(){const image={width:10,height:10};Object.defineProperty(image,'src',{set(){image.onload();}});return image;}};
+ p.createCanvas=()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:[]})})});
+ p.checkImage=async()=>{throw safetyFailure();};
+ let toast;global.wx={chooseMedia:o=>o.success({tempFiles:[{tempFilePath:'/new.jpg'}]}),getImageInfo:o=>o.success({width:10,height:10}),showToast:o=>toast=o.title};
+ await p.choosePhoto();assert.equal(p.source,old);assert.equal(p.image,old);assert.equal(p.history,history);assert.equal(p.data.busy,false);assert.equal(toast,'内容含违规信息，请修改后重试');
+});
+test('rejected final composite never reaches album, temp export or preview',async()=>{
+ const p=page();p.source={};p.image={};p.originalWidth=10;p.originalHeight=10;p.frame.enabled=false;
+ const ctx={drawImage(){},fillRect(){},getImageData(){return {data:new Uint8ClampedArray([1,1,1,255])};},putImageData(){}};
+ p.createCanvas=()=>({getContext:()=>ctx});p.exportCanvas={getContext:()=>ctx};
+ p.checkImage=async()=>{throw safetyFailure();};p.saveToAlbum=()=>assert.fail('must not save');
+ global.wx={showLoading(){},hideLoading(){},showToast(){},canvasToTempFilePath(){assert.fail('must not export');},previewImage(){assert.fail('must not preview');}};
+ await p.exportPhoto();assert.equal(p.lastExport,undefined);assert.equal(p.data.exporting,false);
+});
+test('rejected import is never displayed in confirmation, saved or applied',async()=>{
+ const p=page();p.source={};p.checkText=async()=>{throw safetyFailure();};let dialogs=0;
+ const code=require('../miniprogram/utils/presets').encode({version:1,name:'blocked',values:config.defaults()});
+ global.wx={showModal:o=>{dialogs++;o.success({confirm:true,content:code});},setStorageSync(){assert.fail('must not save');},showToast(){}};
+ await p.importPreset();assert.equal(dialogs,1);assert.equal(p.pendingPreset,undefined);assert.equal(p.history.items.length,1);assert.equal(p.data.busy,false);
+});
+test('legacy presets are checked before listing, application and copying',async()=>{
+ const p=page();p.source={};const row={id:'old',version:1,name:'blocked',values:config.defaults(),updatedAt:1};
+ p.checkText=async()=>{throw safetyFailure();};
+ global.wx={getStorageSync:()=>[row],showToast(){},showActionSheet:o=>o.success({tapIndex:0}),setClipboardData(){assert.fail('must not copy');}};
+ await p.refreshPresets();assert.deepEqual(p.data.savedPresets,[]);
+ p.data.savedPresets=[row];await p.applySavedPreset({currentTarget:{dataset:{id:'old'}}});assert.equal(p.history.items.length,1);
+ await p.presetMenu({currentTarget:{dataset:{id:'old'}}});assert.equal(p.data.busy,false);
+});
+test('preset moderation locks replacement and edits until completion',async()=>{
+ const p=page();p.source={};p.canvas={};const row={id:'one',version:1,name:'one',values:config.defaults()};p.data.savedPresets=[row];
+ let resolve;p.checkText=value=>value?new Promise(r=>resolve=r):Promise.resolve();global.wx={chooseMedia(){assert.fail('must not replace while checking');}};
+ const pending=p.applySavedPreset({currentTarget:{dataset:{id:'one'}}});await Promise.resolve();await Promise.resolve();
+ assert.equal(p.data.busy,true);await p.choosePhoto();p.reset();assert.equal(p.frame.enabled,true);resolve();await pending;assert.equal(p.data.busy,false);
 });
