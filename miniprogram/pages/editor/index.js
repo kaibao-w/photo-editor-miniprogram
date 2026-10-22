@@ -30,7 +30,18 @@ const editor = {
   onShareAppMessage(){
     const covers=['photography','comparison','glow','film'];
     const cover=covers[Math.floor(Math.random()*covers.length)];
-    return {title:'微光快调 · 图片调色',path:'/pages/editor/index',imageUrl:'/assets/share/'+cover+'.jpg'};
+    const titles=[
+      '微光快调｜轻松调色，留住好光景',
+      '微光快调｜给日常照片一点好颜色',
+      '微光快调｜把喜欢的瞬间，调成喜欢的色彩',
+      '微光快调｜清透、暖色、胶片，找到你的风格',
+      '微光快调｜为照片添点光，也添点心情',
+      '微光快调｜换一种色调，重温这一刻',
+      '微光快调｜调好颜色，装下美好',
+      '微光快调｜让随手拍，也有自己的风格'
+    ];
+    const title=titles[Math.floor(Math.random()*titles.length)];
+    return {title,path:'/pages/editor/index',imageUrl:'/assets/share/'+cover+'.jpg'};
   },
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
