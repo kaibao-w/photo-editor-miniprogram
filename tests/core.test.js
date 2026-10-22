@@ -10,3 +10,22 @@ test('history preserves snapshots, alternate branches and marks',()=>{const s=st
 test('anchored zoom and movement bounds',()=>{assert.deepEqual(zoomAt({zoom:1,x:0,y:0},2,50,20),{zoom:2,x:-50,y:-20});assert.deepEqual(bounds({zoom:2,x:900,y:-900},400,300,.75),{zoom:2,x:200,y:-150});});
 test('export dimensions are bounded and never upscale',()=>{assert.deepEqual(exportSize(800,600,true),{width:800,height:600,reduced:false});for(const original of [true,false]){const s=exportSize(5712,4284,original);assert(s.width*s.height<=12001000);assert(Math.max(s.width,s.height)<=(original?4096:2048));assert(s.reduced);assert(Math.abs(s.width/s.height-4/3)<.001);}});
 test('frame defaults and parameter order',()=>{assert.equal(config.frameDefaults.enabled,true);assert.deepEqual(config.frames.map(d=>d[0]),['size','radius','shadow','blur','darkness']);const g=frameGeometry(1000,1500,config.frameDefaults);assert.equal(g.w,830);assert.equal(g.x,85);assert(g.y+g.h<1500);});
+
+test('white and black levels target opposite tonal ends and preserve alpha',()=>{
+ const render=(value,key,amount)=>{const d={data:new Uint8ClampedArray([value,value,value,89])};grade(d,{...config.defaults(),[key]:amount});assert.equal(d.data[3],89);return d.data[0];};
+ assert(render(220,'whites',40)-220>render(30,'whites',40)-30);
+ assert(render(220,'whites',-40)<220);
+ assert(render(30,'blacks',40)-30>render(220,'blacks',40)-220);
+ assert(render(30,'blacks',-40)<30);
+ let previous=-1;
+ for(let n=0;n<=255;n++){const d={data:new Uint8ClampedArray([n,n,n,255])};grade(d,{...config.defaults(),whites:-100,blacks:100});assert(d.data[0]>=previous);previous=d.data[0];}
+});
+test('vibrance favors muted colors and keeps neutrals and monochrome neutral',()=>{
+ const render=(rgb,values)=>{const d={data:new Uint8ClampedArray([...rgb,255])};grade(d,{...config.defaults(),...values});return [...d.data].slice(0,3);};
+ const span=rgb=>Math.max(...rgb)-Math.min(...rgb);
+ const muted=[130,100,100],vivid=[200,5,5];
+ assert(span(render(muted,{vibrance:80}))/span(muted)>span(render(vivid,{vibrance:80}))/span(vivid));
+ assert(span(render(muted,{vibrance:-80}))<span(muted));
+ assert.deepEqual(render([100,100,100],{vibrance:100}),[100,100,100]);
+ assert.equal(span(render(muted,{vibrance:100,saturation:-100})),0);
+});

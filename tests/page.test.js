@@ -93,3 +93,38 @@ test('large photo exports automatically at safe dimensions without confirmation'
  global.wx={showModal(){assert.fail('Export must not request size confirmation');},showLoading(){},hideLoading(){},canvasToTempFilePath(o){exported=o;o.success({tempFilePath:'/tmp/export.jpg'});}};
  await p.exportPhoto();assert.equal(exported.destWidth,4000);assert.equal(exported.destHeight,3000);assert.equal(exported.quality,.95);assert.equal(saved,'/tmp/export.jpg');assert.equal(p.data.busy,false);
 });
+
+test('AI applies validated values with undo and keeps frame',async()=>{
+ const p=page();p.source={};p._aiConsent=true;p.data.aiPrompt='再暖一点';p.aiThumbnail=async()=>'/thumbnail';const before=p.state();
+ global.wx={cloud:{callFunction:async()=>({result:{ok:true,status:'ok',values:{...p.values,temperature:20},summary:'增加暖意'}})},showToast(){}};
+ await p.sendAi();assert.equal(p.values.temperature,20);assert.deepEqual(p.frame,before.frame);assert.equal(p.history.items.length,2);assert.equal(p.data.aiBusy,false);p.undo();assert.deepEqual(p.state(),before);
+});
+test('AI consent rejection does not upload',async()=>{
+ const p=page();p.source={};p.data.aiPrompt='自然';p.aiThumbnail=()=>assert.fail('must not prepare upload');
+ global.wx={cloud:{callFunction:()=>assert.fail('must not call cloud')},showModal:o=>{assert([...o.confirmText].length<=4);o.success({confirm:false});}};
+ await p.sendAi();assert.equal(p.data.aiBusy,false);assert.equal(p.history.items.length,1);
+});
+test('late AI result cannot overwrite a manual edit or cancellation',async()=>{
+ for(const action of ['edit','cancel','replace']){
+  const p=page();p.source={};p._aiConsent=true;p.data.aiPrompt='自然';p.aiThumbnail=async()=>'/thumbnail';let resolve;
+  global.wx={cloud:{callFunction:()=>new Promise(r=>resolve=r)},showToast(){}};
+  const task=p.sendAi();await Promise.resolve();await Promise.resolve();
+  if(action==='edit'){p.values.contrast=31;p.edit('手动');}else if(action==='cancel')p.cancelAi();else p.source={};
+  resolve({result:{ok:true,status:'ok',values:{...config.defaults(),contrast:90},summary:'增强对比'}});
+  await task;assert.notEqual(p.values.contrast,90);assert.equal(p.data.aiBusy,false);
+ }
+});
+test('invalid AI values never change editing state',async t=>{
+ t.mock.method(console,'warn',()=>{});
+ const p=page();p.source={};p._aiConsent=true;p.data.aiPrompt='自然';p.aiThumbnail=async()=>'/thumbnail';const before=p.state();
+ global.wx={cloud:{callFunction:async()=>({result:{ok:true,status:'ok',values:{...config.defaults(),exposure:99},summary:'错误'}})},showToast(){}};
+ await p.sendAi();assert.deepEqual(p.state(),before);assert.equal(p.history.items.length,1);assert.equal(p.data.aiBusy,false);
+});
+
+test('AI diagnostics retain failure stage and SDK code without exposing credentials to logs or users',async t=>{
+ const logs=[],toasts=[];t.mock.method(console,'warn',(...args)=>logs.push(args));
+ const p=page();p.source={};p._aiConsent=true;p.data.aiPrompt='自然';p.aiThumbnail=async()=>'/thumbnail';
+ global.wx={cloud:{callFunction:async()=>{throw {errCode:-501000,errMsg:'cloud.callFunction:fail function not found sk-test-secret Bearer test-token'};}},showToast:o=>toasts.push(o.title)};
+ await p.sendAi();assert.equal(logs[0][1].stage,'cloudFunction');assert.equal(logs[0][1].code,'-501000');assert.match(logs[0][1].message,/function not found/);
+ assert(!JSON.stringify(logs).includes('sk-test-secret'));assert(!JSON.stringify(logs).includes('test-token'));assert(!JSON.stringify(toasts).includes('function not found'));
+});

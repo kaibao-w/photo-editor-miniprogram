@@ -1,4 +1,5 @@
 const savedPresets=require('../../utils/presets');
+const aiEditor=require('../../utils/ai-editor');
 const config = require('../../utils/config');
 const { grade, composeFrame } = require('../../utils/image');
 const History = require('../../utils/history');
@@ -6,12 +7,15 @@ const { bounds, zoomAt, exportSize } = require('../../utils/view');
 const call = (name, args = {}) => new Promise((resolve, reject) => wx[name]({ ...args, success: resolve, fail: reject }));
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 const isPrivacyScopeError = error => !!error && (error.errno===112 || error.errNo===112 || /api scope is not declared in the privacy agreement/i.test(error.errMsg||''));
-const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',saturation:'◉',temperature:'◑',tint:'◈'};
+const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',whites:'◇',blacks:'◆',vibrance:'✧',saturation:'◉',temperature:'◑',tint:'◈'};
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 Page({
+  ...aiEditor,
   data: {
     savedPresets:[],selectedPresetId:'',
-    ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
+    aiPrompt:'',aiBusy:false,aiStatus:'描述你想要的亮度、冷暖或色彩风格',aiKeyboardHeight:0,
+    aiSuggestions:['自然通透，保留真实色彩','暖调胶片，柔和一点','冷调电影感，控制高光'],
+    ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'ai',label:'AI 调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
@@ -28,7 +32,7 @@ Page({
   onShareAppMessage(){return {title:'微光快调 · 图片调色',path:'/pages/editor/index'};},
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
-    this._alive = false; clearTimeout(this._timer);
+    this.cancelAi();this._alive = false; clearTimeout(this._timer);
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
     for(const canvas of [this.canvas, this.exportCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
@@ -50,7 +54,7 @@ Page({
     // Keep the editing controls compact so the photo gets most of the viewport.
     const safeBottom = info.safeArea ? Math.max(0, info.screenHeight - info.safeArea.bottom) : 0;
     // Keep the control dock at the frame panel's compact height for every tab.
-    const stageHeight = Math.max(44, info.windowHeight-44-36-139-safeBottom);
+    const stageHeight = Math.max(44, info.windowHeight-44-36-139-safeBottom-(this.data.aiKeyboardHeight||0));
     return new Promise(resolve => this.setData({stageHeight}, () => wx.createSelectorQuery().in(this).select('.preview-surface').boundingClientRect(rect => {
       if(rect) {this.rect=rect; this.dpr=Math.min(info.pixelRatio || 2, 2); this.canvas.width=Math.round(rect.width*this.dpr); this.canvas.height=Math.round(rect.height*this.dpr); this.drawView();} resolve();
     }).exec()));
@@ -72,10 +76,10 @@ Page({
       canUndo:this.history.items[this.history.current].parent!==null,canRedo:!!this.history.redos.length,marked:this.history.items[this.history.current].marked});
   },
   commit(label) {if(this.history){this.history.record(this.state(),label);this.syncHistory();}},
-  edit(label) {this.setData({comparing:false});this.sync();this.schedule();if(label)this.commit(label);},
+  edit(label) {this._editRevision=(this._editRevision||0)+1;this.setData({comparing:false});this.sync();this.schedule();if(label)this.commit(label);},
   async choosePhoto() {
     if(this.data.selectingPhoto || this.data.exporting || !this.canvas) return;
-    this.setData({busy:true,selectingPhoto:true});
+    this.cancelAi();this.setData({busy:true,selectingPhoto:true});
     try {
       const result=await call('chooseMedia',{count:1,mediaType:['image'],sourceType:['album','camera'],sizeType:['original']});
       const file=result.tempFiles && result.tempFiles[0];
@@ -130,6 +134,8 @@ Page({
     finally {if(this._alive)this.setData({busy:false,selectingPhoto:false});}
   },
   initializePhotoEdits(){
+    this._editRevision=(this._editRevision||0)+1;
+    this.setData({aiPrompt:'',aiStatus:'描述你想要的亮度、冷暖或色彩风格'});
     this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
     this.values={...config.defaults(),...config.presets.night};
     this.frame={...config.frameDefaults,caption:'微光快调 - 冷调'};
