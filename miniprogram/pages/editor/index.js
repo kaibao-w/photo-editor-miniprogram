@@ -15,7 +15,7 @@ Page({
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
-    presets: [{key:'night',label:'冷调'},{key:'landscape',label:'风光'},{key:'portrait',label:'人像'},{key:'clear',label:'清透'},{key:'warm',label:'暖色'}], preset: '',
+    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'},{key:'film',label:'胶片'},{key:'mono',label:'黑白'}], preset: '',
     label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
   },
