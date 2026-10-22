@@ -95,11 +95,11 @@ test('large photo exports automatically at safe dimensions without confirmation'
 });
 
 const safetyFailure=()=>Object.assign(new Error('private provider data'),{safety:'blocked'});
-test('caption remains unrendered until approved; rejected text never enters history',async()=>{
+test('caption previews immediately and rejection restores approved text without recording it',async()=>{
  const p=page();p.source={};p.frame.caption='old';let resolve;
  p.checkText=()=>new Promise(r=>resolve=r);global.wx={showToast(){}};
  p.captionInput({detail:{value:'new'}});assert.equal(p.frame.caption,'old');
- const pending=p.captionBlur();assert.equal(p.data.busy,true);assert.equal(p.frame.caption,'old');
+ const pending=p.captionBlur();assert.equal(p.data.busy,true);assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,1);
  resolve();await pending;assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,2);
  p.checkText=async()=>{throw safetyFailure();};p.captionInput({detail:{value:'blocked'}});
  assert.equal(await p.captionBlur(),false);assert.equal(p.frame.caption,'new');assert.equal(p.history.items.length,2);assert.equal(p.data.busy,false);
@@ -115,25 +115,27 @@ test('background rejection clears current image, but stale results cannot clear 
   assert.equal(p.source,null);assert.equal(p.image,null);assert.equal(p.history,null);assert.equal(p.data.ready,false);
  }finally{api.checkPreparedImage=original;}
 });
-test('rejected final composite never reaches album, temp export or preview',async()=>{
+test('saving approved original does not check caption or final composite again',async()=>{
  const p=page();p.source={};p.image={};p.originalWidth=10;p.originalHeight=10;p.frame.enabled=false;
+ p.ensurePhotoApproved=definition.ensurePhotoApproved;p._photoCheck={passUntil:1};
  const ctx={drawImage(){},fillRect(){},getImageData(){return {data:new Uint8ClampedArray([1,1,1,255])};},putImageData(){}};
  p.createCanvas=()=>({getContext:()=>ctx});p.exportCanvas={getContext:()=>ctx};
- p.checkImage=async()=>{throw safetyFailure();};p.saveToAlbum=()=>assert.fail('must not save');
- global.wx={showLoading(){},hideLoading(){},showToast(){},canvasToTempFilePath(){assert.fail('must not export');},previewImage(){assert.fail('must not preview');}};
- await p.exportPhoto();assert.equal(p.lastExport,undefined);assert.equal(p.data.exporting,false);
+ p.checkImage=()=>assert.fail('must not check composite');p.checkText=()=>assert.fail('must not repeat text check');p.startPhotoCheck=()=>assert.fail('must not start check');
+ let saved;p.saveToAlbum=async path=>saved=path;
+ global.wx={showLoading(){},hideLoading(){},canvasToTempFilePath:o=>o.success({tempFilePath:'/approved.jpg'})};
+ await p.exportPhoto();assert.equal(saved,'/approved.jpg');assert.equal(p.data.exporting,false);
 });
-test('rejected import is never displayed in confirmation, saved or applied',async()=>{
+test('rejected optimistic import restores list and history without persisting',async()=>{
  const p=page();p.source={};p.checkText=async()=>{throw safetyFailure();};let dialogs=0;
  const code=require('../miniprogram/utils/presets').encode({version:1,name:'blocked',values:config.defaults()});
  global.wx={showModal:o=>{dialogs++;o.success({confirm:true,content:code});},setStorageSync(){assert.fail('must not save');},showToast(){}};
- await p.importPreset();assert.equal(dialogs,1);assert.equal(p.pendingPreset,undefined);assert.equal(p.history.items.length,1);assert.equal(p.data.busy,false);
+ await p.importPreset();assert.equal(dialogs,2);assert.deepEqual(p.data.savedPresets,[]);assert.equal(p.pendingPreset,undefined);assert.equal(p.history.items.length,1);assert.equal(p.data.busy,false);
 });
-test('legacy presets are checked before listing, application and copying',async()=>{
+test('saved presets list locally but still require checks before application and copying',async()=>{
  const p=page();p.source={};const row={id:'old',version:1,name:'blocked',values:config.defaults(),updatedAt:1};
  p.checkText=async()=>{throw safetyFailure();};
  global.wx={getStorageSync:()=>[row],showToast(){},showActionSheet:o=>o.success({tapIndex:0}),setClipboardData(){assert.fail('must not copy');}};
- await p.refreshPresets();assert.deepEqual(p.data.savedPresets,[]);
+ await p.refreshPresets();assert.deepEqual(p.data.savedPresets,[row]);
  p.data.savedPresets=[row];await p.applySavedPreset({currentTarget:{dataset:{id:'old'}}});assert.equal(p.history.items.length,1);
  await p.presetMenu({currentTarget:{dataset:{id:'old'}}});assert.equal(p.data.busy,false);
 });
@@ -173,4 +175,54 @@ test('failed source moderation blocks export before generating any output',async
  p.ensurePhotoApproved=async()=>{throw Object.assign(new Error(),{safety:'pending'});};
  p.createCanvas=()=>assert.fail('must not generate');p.saveToAlbum=()=>assert.fail('must not save');
  global.wx={showToast(){}};await p.exportPhoto();assert.equal(p.lastExport,undefined);assert.equal(p.data.exporting,false);
+});
+
+test('opening and returning to the page lists presets without moderation or loading',()=>{
+ const p=page(),row={id:'saved',version:1,name:'旅行',values:config.defaults(),updatedAt:1};
+ p.checkPreset=()=>assert.fail('opening must not check content');
+ global.wx={getStorageSync:()=>[row],showLoading:()=>assert.fail('opening must not show loading'),cloud:{callFunction:()=>assert.fail('opening must not call cloud')}};
+ p.onShow();assert.deepEqual(p.data.savedPresets,[row]);
+ p.onShow();assert.deepEqual(p.data.savedPresets,[row]);
+});
+
+test('saving unfinished original never starts another moderation request',async()=>{
+ const p=page();p.ensurePhotoApproved=definition.ensurePhotoApproved;p._photoCheck={passUntil:0};
+ p.startPhotoCheck=()=>assert.fail('must not submit');
+ await assert.rejects(p.ensurePhotoApproved(),e=>e.safety==='pending');
+});
+
+test('caption checks silently and rolls back with toast on rejection',async()=>{
+ const p=page();p.source={};p.frame.caption='上一版';p.checkText=definition.checkText;
+ let reject,toast;
+ global.wx={getStorageSync:()=>true,showLoading:()=>assert.fail('caption must not show loading'),hideLoading:()=>assert.fail('caption must not hide another loading'),showToast:o=>toast=o.title,cloud:{callFunction:()=>new Promise((_,r)=>reject=r)}};
+ p.captionInput({detail:{value:'新文字'}});const pending=p.captionBlur();
+ assert.equal(p.frame.caption,'新文字');assert.equal(p.data.captionChecking,true);
+ await new Promise(resolve=>setImmediate(resolve));reject(Object.assign(new Error(),{safety:'blocked'}));
+ assert.equal(await pending,false);assert.equal(p.frame.caption,'上一版');assert.equal(p.data.captionChecking,false);assert.equal(toast,'内容含违规信息，请修改后重试');
+});
+
+test('preset rename previews silently then restores on rejection without writing storage',async()=>{
+ const p=page(),row={id:'one',version:1,name:'旧名称',values:config.defaults(),updatedAt:1};p.data.savedPresets=[row];
+ p.checkText=definition.checkText;let resolve;const toasts=[];
+ global.wx={getStorageSync:()=>true,setStorageSync:()=>assert.fail('unchecked name must not persist'),showLoading:()=>assert.fail('must be silent'),showToast:o=>toasts.push(o.title),showActionSheet:o=>o.success({tapIndex:1}),showModal:o=>o.success({confirm:true,content:'新名称'}),cloud:{callFunction:()=>new Promise(r=>resolve=r)}};
+ const pending=p.presetMenu({currentTarget:{dataset:{id:'one'}}});await new Promise(r=>setImmediate(r));
+ assert.equal(p.data.savedPresets[0].name,'新名称');assert.equal(p.data.presetChecking,true);
+ resolve({result:{status:'blocked'}});await pending;
+ assert.equal(p.data.savedPresets[0].name,'旧名称');assert.equal(p.data.presetChecking,false);assert.deepEqual(toasts,['内容含违规信息，请修改后重试']);
+});
+test('applying preset previews immediately; rejection restores parameters and redo history',async()=>{
+ const p=page();p.source={};p.values.contrast=10;p.commit('调整');p.undo();
+ const before=p.state(),history=JSON.stringify(p.history),row={id:'one',version:1,name:'新预设',values:{...config.defaults(),contrast:50},frame:{...config.frameDefaults,caption:'文案'}};
+ p.data.savedPresets=[row];let reject;p.checkPreset=()=>new Promise((_,r)=>reject=r);global.wx={showToast(){}};
+ const pending=p.applySavedPreset({currentTarget:{dataset:{id:'one'}}});await new Promise(r=>setImmediate(r));
+ assert.equal(p.values.contrast,50);assert.equal(p.frame.caption,'文案');assert.equal(JSON.stringify(p.history),history);
+ reject(safetyFailure());await pending;assert.deepEqual(p.state(),before);assert.equal(JSON.stringify(p.history),history);assert.equal(p.data.selectedPresetId,'');
+});
+test('saving preset previews before approval and persists only after success',async()=>{
+ const p=page();p.source={};let rows=[],resolve;
+ p.checkPreset=()=>new Promise(r=>resolve=r);
+ global.wx={getStorageSync:()=>rows,setStorageSync:(k,v)=>rows=v,showModal:o=>o.success({confirm:true,content:'旅行'}),showToast:()=>assert.fail('no success toast needed')};
+ const pending=p.savePreset();await new Promise(r=>setImmediate(r));
+ assert.equal(p.data.savedPresets[0].name,'旅行');assert.equal(rows.length,0);
+ resolve();await pending;assert.equal(rows[0].name,'旅行');assert.equal(p.data.savedPresets[0].id,rows[0].id);
 });

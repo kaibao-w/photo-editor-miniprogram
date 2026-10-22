@@ -12,7 +12,7 @@ const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 const editor = {
   data: {
-    savedPresets:[],selectedPresetId:'',photoCheckStatus:'',
+    savedPresets:[],selectedPresetId:'',photoCheckStatus:'',captionChecking:false,presetChecking:false,
     ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
@@ -77,16 +77,16 @@ const editor = {
     if(error.safety) {wx.showToast({title:error.safety==='blocked'?'内容含违规信息，请修改后重试':error.safety==='pending'?'内容检测中，请稍后重试':'暂时无法完成检测，请稍后重试',icon:'none'});return;}
     console.warn(fallback, error); wx.showToast({title:fallback,icon:'none'});
   },
-  async checkText(text){
+  async checkText(text,options){
     this._safeTexts=this._safeTexts||new Set();
     if(!text || this._safeTexts.has(text))return;
-    await contentSafety.text(text);
+    await contentSafety.text(text,options);
     this._safeTexts.add(text);
   },
   async checkPreset(row){
     savedPresets.validate(row);
-    await this.checkText(row.name);
-    await this.checkText(row.frame && row.frame.caption);
+    await this.checkText(row.name,{foreground:false});
+    await this.checkText(row.frame && row.frame.caption,{foreground:false});
   },
   async prepareDetection(image,width,height){
     const scale=Math.min(1,750/width,750/height);
@@ -124,14 +124,14 @@ const editor = {
     })();
     return record.promise;
   },
-  retryPhotoCheck(){if(this.source&&!this.data.busy&&this._photoCheck)this.startPhotoCheck(this._photoCheck);},
   async ensurePhotoApproved(){
     const record=this._photoCheck;
     if(!record)throw contentSafety.failure('unavailable');
-    if(record.passUntil>Date.now())return;
+    if(record.passUntil>0)return;
+    if(!record.promise)throw record.error||contentSafety.failure('pending');
     const finish=loading.begin('安全检测中');
     try{
-      const passed=await this.startPhotoCheck(record);
+      const passed=await record.promise;
       if(!this._alive||this._photoCheck!==record)throw contentSafety.failure('cancel');
       if(!passed)throw record.error||contentSafety.failure('unavailable');
     }finally{finish();}
@@ -256,12 +256,13 @@ const editor = {
   async captionBlur(){
     if(this._captionPromise)return this._captionPromise;
     if(this._captionDraft===undefined)return true;
-    const photoCheck=this._photoCheck,caption=this._captionDraft;this._captionDraft=undefined;
-    this.setData({busy:true});
+    const photoCheck=this._photoCheck,previous=this.frame.caption,caption=this._captionDraft;this._captionDraft=undefined;
+    this.setData({busy:true,captionChecking:true});
+    this.frame.caption=caption;this.edit();
     this._captionPromise=(async()=>{
-      try{await this.checkText(caption);if(!this._alive||this._photoCheck!==photoCheck||!this.source)return false;this.frame.caption=caption;this.edit('画框 · 底部文字');return true;}
-      catch(error){if(this._alive){this.setData({'frame.caption':this.frame.caption});this.error(error,'文字暂时无法使用');}return false;}
-      finally{this._captionPromise=null;if(this._alive)this.setData({busy:false});}
+      try{await this.checkText(caption,{foreground:false});if(!this._alive||this._photoCheck!==photoCheck||!this.source)return false;this.commit('画框 · 底部文字');return true;}
+      catch(error){if(this._alive&&this._photoCheck===photoCheck&&this.source){this.frame.caption=previous;this.edit();this.error(error,'文字暂时无法使用，已恢复');}return false;}
+      finally{this._captionPromise=null;if(this._alive)this.setData({busy:false,captionChecking:false});}
     })();
     return this._captionPromise;
   },
@@ -313,14 +314,12 @@ const editor = {
     try {
       await this.ensurePhotoApproved();
       if(!this._alive||!this.source)return;
-      await this.checkText(state.frame.caption);
       finishLoading=loading.begin('正在生成图片');await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
       if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}pc.drawImage(this.image,0,0,size.width,size.height);
       for(let y=0;y<size.height;y+=128){const h=Math.min(128,size.height-y);pc.putImageData(grade(pc.getImageData(0,y,size.width,h),state.values),0,y);await pause();if(!this._alive)return;}
       this.exportCanvas.width=size.width;this.exportCanvas.height=size.height;const out=this.exportCanvas.getContext('2d');
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);
-      await this.checkImage(this.exportCanvas,size.width,size.height,{scope:JSON.stringify({state,width:this.originalWidth,height:this.originalHeight}),isCurrent:()=>this._alive});
       if(!this._alive)return;
       const result=await call('canvasToTempFilePath',{canvas:this.exportCanvas,x:0,y:0,width:size.width,height:size.height,destWidth:size.width,destHeight:size.height,fileType:type,quality:.95});
       if(finishLoading)finishLoading();this.lastExport=result.tempFilePath;await this.saveToAlbum(result.tempFilePath);
@@ -337,28 +336,49 @@ const editor = {
     }
   },
   async refreshPresets(){
-    const revision=this._presetRefresh=(this._presetRefresh||0)+1;
     try{
-      const rows=savedPresets.read().filter(r=>!r.deleted).sort((a,b)=>b.updatedAt-a.updatedAt),safe=[];
-      for(const row of rows){
-        try{await this.checkPreset(row);safe.push(row);}
-        catch(error){if(error.safety!=='blocked')throw error;}
+      // Listing saved presets is local-only; user actions still validate content.
+      const rows=savedPresets.read().filter(r=>{
+        if(!r||r.deleted)return false;
+        try{savedPresets.validate(r);return true;}catch(error){return false;}
+      }).sort((a,b)=>b.updatedAt-a.updatedAt);
+      if(this._alive)this.setData({savedPresets:rows});
+    }catch(error){if(this._alive){this.setData({savedPresets:[]});this.error(error,'读取预设失败');}}
+  },
+  async previewPreset(row,{persist=false,id,apply=false,select=false}={}){
+    const valid=savedPresets.validate(row);
+    const previous={rows:this.data.savedPresets,selected:this.data.selectedPresetId,state:this.state(),pending:this.pendingPreset,photo:this._photoCheck};
+    const candidate={...valid,id:id||row.id||`${Date.now().toString(36)}-${Math.random().toString(36).slice(2,12)}`,updatedAt:Date.now()};
+    // Preview immediately, but persist only approval so closing the app cannot retain unchecked text.
+    if(persist)this.setData({savedPresets:[candidate,...previous.rows.filter(r=>r.id!==candidate.id)]});
+    if(select||apply)this.setData({selectedPresetId:candidate.id});
+    if(apply&&this.source){this.values={...candidate.values};if(candidate.frame)this.frame={...this.frame,...candidate.frame};this.edit();}
+    try{
+      await this.checkPreset(candidate);
+      if(!this._alive)return;
+      if(persist){savedPresets.save(candidate,candidate.id);await this.refreshPresets();}
+      if(apply&&this.source&&this._photoCheck===previous.photo)this.commit('预设 · '+candidate.name);
+      if(select&&!this.source)this.pendingPreset=candidate;
+    }catch(error){
+      if(this._alive){
+        this.setData({savedPresets:previous.rows,selectedPresetId:previous.selected});
+        this.pendingPreset=previous.pending;
+        if(apply&&this.source&&this._photoCheck===previous.photo){this.values=previous.state.values;this.frame=previous.state.frame;this.edit();}
       }
-      if(this._alive&&revision===this._presetRefresh)this.setData({savedPresets:safe});
-    }catch(error){if(this._alive&&revision===this._presetRefresh){this.setData({savedPresets:[]});this.error(error,'读取预设失败');}}
+      throw error;
+    }
   },
   async savePreset(){
     if(!this.source)return;
     const payload={version:1,name:'',values:{...this.values},frame:{...this.frame}};
     const result=await call('showModal',{title:'保存当前预设',editable:true,placeholderText:'预设名称（最多30字）'});
     if(!result.confirm)return;payload.name=(result.content||'').trim();
-    try{await this.checkPreset(payload);if(!this._alive)return;savedPresets.save(payload);await this.refreshPresets();wx.showToast({title:'预设已保存',icon:'success'});}catch(e){this.error(e,'保存预设失败，请稍后重试');}
+    try{await this.previewPreset(payload,{persist:true});}catch(e){this.error(e,'保存预设失败，请稍后重试');}
   },
   async applySavedPreset(e){
     if(!this.source)return;
     const row=this.data.savedPresets.find(r=>r.id===e.currentTarget.dataset.id);if(!row)return;
-    await this.checkPreset(row);if(!this._alive)return;
-    this.applyApprovedPreset(row);
+    await this.previewPreset(row,{apply:true});
   },
   applyApprovedPreset(row){
     this.setData({selectedPresetId:row.id});this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.edit('预设 · '+row.name);
@@ -366,11 +386,9 @@ const editor = {
   async importPreset(){try{
     const result=await call('showModal',{title:'导入预设码',editable:true,placeholderText:'粘贴 GY1: 开头的完整预设码'});if(!result.confirm)return;
     const row=savedPresets.decode(result.content);
-    await this.checkPreset(row);if(!this._alive)return;
     const confirm=await call('showModal',{title:row.name,content:'包含调色参数'+(row.frame?'、画框参数':'')+(row.frame&&row.frame.caption!==undefined?'、底部文字':'')+'，是否导入我的预设？'});if(!confirm.confirm)return;
-    const saved=savedPresets.save(row);await this.refreshPresets();this.setData({tab:'presets',selectedPresetId:saved.id});
-    if(this.source){this.applyApprovedPreset(saved);}
-    else{this.pendingPreset=saved;wx.showToast({title:'已选中，选图后应用',icon:'none'});}
+    this.setData({tab:'presets'});
+    await this.previewPreset(row,{persist:true,apply:true,select:true});
   }catch(e){
     const inputErrors=['请输入完整的微光快调预设码','预设码无效或版本不支持','预设名称或版本无效','调色参数无效','画框参数无效','底部文字无效'];
     if(inputErrors.includes(e.message)) wx.showToast({title:e.message,icon:'none'});
@@ -392,8 +410,8 @@ const editor = {
       }
       return;
     }
-    if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;const next={...row,name:answer.content};await this.checkPreset(next);if(!this._alive)return;savedPresets.save(next,row.id);}
-    if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};await this.checkPreset(next);if(!this._alive)return;savedPresets.save(next,row.id);}
+    if(result.tapIndex===1){const answer=await call('showModal',{title:'重命名',editable:true,content:row.name});if(!answer.confirm)return;const next={...row,name:answer.content};await this.previewPreset(next,{persist:true,id:row.id});}
+    if(result.tapIndex===2){if(!this.source){wx.showToast({title:'请先选择图片',icon:'none'});return;}const answer=await call('showModal',{title:'覆盖预设',content:'用当前调色、画框及底部文字覆盖此预设。'});if(!answer.confirm)return;const next={...row,values:{...this.values},frame:{...this.frame}};await this.previewPreset(next,{persist:true,id:row.id});}
     if(result.tapIndex===3){const answer=await call('showModal',{title:'删除预设',content:`确定删除「${row.name}」吗？好友已导入的副本不受影响。`});if(!answer.confirm)return;savedPresets.remove(row.id);}
     await this.refreshPresets();
   }catch(e){
@@ -411,10 +429,10 @@ for(const method of ['savePreset','applySavedPreset','importPreset','presetMenu'
   editor[method]=async function(...args){
     if(this._securityAction || (this.data.busy&&!this._captionPromise))return;
     if(!await this.captionBlur() || !this._alive || this.data.busy || this._securityAction)return;
-    this._securityAction=true;this.setData({busy:true});
+    this._securityAction=true;this.setData({busy:true,presetChecking:true});
     try{return await action.apply(this,args);}
     catch(error){if(this._alive)this.error(error,'操作失败，请稍后重试');}
-    finally{this._securityAction=false;if(this._alive)this.setData({busy:false});}
+    finally{this._securityAction=false;if(this._alive)this.setData({busy:false,presetChecking:false});}
   };
 }
 Page(editor);

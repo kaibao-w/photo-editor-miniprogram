@@ -36,7 +36,11 @@ async function detecting(action){
   const finish=loading.begin('安全检测中');
   try{return await action();}finally{finish();}
 }
-async function text(value) {if(value && value.trim())await detecting(()=>request({kind:'text',text:value}));}
+async function text(value,{foreground=true}={}) {
+  if(!value || !value.trim())return;
+  const action=()=>request({kind:'text',text:value});
+  return foreground?detecting(action):action();
+}
 // Cache exact detection bytes plus editing scope, only in this app session.
 const imageChecks=new Map();
 const PASS_TTL=10*60*1000,JOB_TTL=3500000,MAX_CACHE_BYTES=8*1024*1024;
