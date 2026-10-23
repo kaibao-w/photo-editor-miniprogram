@@ -145,17 +145,31 @@
 .frame-tab-knob{position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:var(--text-2);transition:left .15s ease,background .15s ease}
 .frame-tab-switch.on .frame-tab-knob{left:12px;background:var(--accent-ink)}
 
-/* AI shares the existing fixed-height dock. */
-.ai-panel{display:flex;flex-direction:column;gap:7px;padding-top:8px}
-.ai-suggestions{height:27px;white-space:nowrap;flex:none;width:100%}
-.ai-suggestion-strip{display:flex;gap:6px}
-.ai-suggestion-strip button{flex:none;height:26px;min-height:0;padding:3px 9px;font-size:10px;line-height:18px;border:1px solid #343d32;background:#222922;color:#b5c1ae}
-.ai-composer{display:flex;align-items:center;gap:6px;height:36px;flex:none;border:1px solid #3b4835;border-radius:8px;background:#131815;padding:3px 4px 3px 10px}
-.ai-composer input{flex:1;min-width:0;height:28px;font-size:12px;color:#e3e9e1}
-.ai-composer button{flex:none;height:28px;min-height:0;font-size:11px;line-height:18px;padding:5px 10px}
-.ai-result{display:flex;align-items:center;gap:8px;min-height:28px}
-.ai-result text{flex:1;min-width:0;font-size:10px;line-height:14px;color:#9eae97;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.ai-result button{flex:none;height:26px;min-height:0;padding:4px 0 4px 8px;font-size:10px;line-height:18px;background:transparent;color:#c9ee8a}
+/* AI fills the dock directly: percentage heights inside scroll-view are unreliable. */
+.ai-panel{display:flex;flex:1;min-height:0;flex-direction:column;justify-content:center;gap:14px;padding:12px;box-sizing:border-box}
+.ai-ideas{display:flex;align-items:center;gap:8px;height:30px;flex:none;min-width:0}
+.ai-ideas-label{flex:none;font-size:10px;color:var(--text-3)}
+.ai-suggestions{flex:1;width:0;min-width:0;height:30px;white-space:nowrap}
+.ai-suggestion-strip{display:flex;width:100%;gap:6px;height:30px}
+.ai-suggestion-strip button{flex:0 0 calc(28.571429% - 5.142857px);width:calc(28.571429% - 5.142857px);min-width:0;height:30px;min-height:0;margin:0;padding:0 3px;border:1px solid var(--border);border-radius:6px;background:var(--raised);color:var(--text-2);font-size:10px;line-height:28px;font-weight:400;text-align:center}
+.ai-composer{display:flex;align-items:center;gap:8px;height:44px;flex:none}
+.ai-input-wrap{display:flex;align-items:center;flex:1;min-width:0;height:44px;padding:0 10px;border:1px solid var(--border-strong);border-radius:8px;background:var(--input)}
+.ai-input-wrap input{width:100%;min-width:0;height:42px;padding:0;font-size:12px;line-height:42px;color:var(--text)}
+.ai-placeholder{color:var(--text-3);font-size:11px}
+.ai-composer .ai-send{display:flex;align-items:center;justify-content:center;flex:0 0 52px;width:52px;height:44px;min-height:0;margin:0;padding:0;border-radius:8px;font-size:12px;line-height:1}
+.ai-composer .ai-cancel{background:var(--raised);border:1px solid var(--border-strong);color:var(--text-2)}
+/* A quiet light pass over the photo; the status stays near the lower edge. */
+.ai-loading{position:absolute;inset:0;z-index:3;overflow:hidden;pointer-events:none}
+.ai-loading-sweep{position:absolute;inset:0;background:linear-gradient(90deg,transparent 33%,rgba(220,244,164,.025) 42%,rgba(235,250,211,.10) 49%,rgba(255,255,255,.035) 51%,transparent 57%);animation:ai-light-pass 4s ease-in-out infinite;will-change:transform}
+.ai-loading-line{position:absolute;left:50%;top:5%;bottom:5%;width:1px;background:linear-gradient(180deg,transparent,rgba(229,248,199,.5) 30%,rgba(246,255,233,.7) 50%,rgba(229,248,199,.5) 70%,transparent);box-shadow:0 0 12px rgba(201,238,138,.2)}
+.ai-loading-badge{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);height:34px;display:flex;align-items:center;gap:9px;padding:0 14px;border:1px solid rgba(255,255,255,.12);border-radius:18px;background:rgba(17,23,18,.88);box-shadow:0 4px 16px rgba(0,0,0,.16)}
+.ai-loading-badge text{font-size:11px;font-weight:400;letter-spacing:1px;line-height:1;color:#e3eadc;white-space:nowrap}
+.ai-loading-wave{display:flex;align-items:center;gap:3px;height:14px}
+.ai-loading-wave view{width:2px;height:12px;border-radius:2px;background:var(--accent);transform:scaleY(.35);animation:ai-wave 1.4s ease-in-out infinite}
+.ai-loading-wave view:nth-child(2){animation-delay:.15s}.ai-loading-wave view:nth-child(3){animation-delay:.3s}.ai-loading-wave view:nth-child(4){animation-delay:.45s}
+@keyframes ai-light-pass{0%{transform:translateX(-65%);opacity:0}12%{opacity:1}78%{opacity:1}100%{transform:translateX(65%);opacity:0}}
+@keyframes ai-wave{0%,100%{transform:scaleY(.35);opacity:.55}50%{transform:scaleY(1);opacity:1}}
+@media (prefers-reduced-motion:reduce){.ai-loading-sweep{display:none}.ai-loading-wave view{animation:none;transform:scaleY(.6)}}
 
 /* Fit the five-character label while retaining the 5.5-item scroll hint. */
 .parameter-label-long{font-size:9px}

@@ -276,3 +276,27 @@ test('source rejection cancels pending AI and late AI cannot restore the rejecte
   assert.equal(p.source,null);assert.equal(p.history,null);assert.equal(p.data.ready,false);assert.equal(p.data.aiBusy,false);
  }finally{api.checkPreparedImage=original;}
 });
+
+test('AI keyboard restores layout on blur even without a zero-height event',()=>{
+ const p=page();p.data.tab='ai';p.canvas={};const heights=[];p.measure=()=>heights.push(p.data.aiKeyboardHeight);
+ p.aiFocus();p.aiKeyboard({detail:{height:280}});assert.equal(p.data.aiKeyboardHeight,280);
+ p.aiBlur();assert.equal(p.data.aiKeyboardHeight,0);assert.deepEqual(heights,[280,0]);
+ p.aiKeyboard({detail:{height:280}});assert.equal(p.data.aiKeyboardHeight,0);
+ p.aiFocus();p.aiKeyboard({detail:{height:260}});p.aiKeyboard({detail:{height:0}});assert.equal(p.data.aiKeyboardHeight,0);
+});
+test('leaving AI tab or hiding page clears keyboard offset',()=>{
+ const p=page();p.data.tab='ai';p.aiFocus();p.aiKeyboard({detail:{height:280}});
+ p.switchTab({currentTarget:{dataset:{key:'frame'}}});assert.equal(p.data.aiKeyboardHeight,0);
+ p.aiKeyboard({detail:{height:280}});assert.equal(p.data.aiKeyboardHeight,0);
+ p.data.tab='ai';p.aiFocus();p.aiKeyboard({detail:{height:280}});p.onHide();assert.equal(p.data.aiKeyboardHeight,0);
+});
+
+test('AI client waits beyond 45 seconds, times out at 70 and ignores late result',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'warn',()=>{});
+ const p=page();p.source={};p._aiConsent=true;p.data.aiPrompt='自然';p.aiThumbnail=async()=>'/thumbnail';const before=p.state();let resolve;const toasts=[];
+ global.wx={cloud:{callFunction:()=>new Promise(r=>resolve=r)},showToast:o=>toasts.push(o.title)};
+ const pending=p.sendAi();await Promise.resolve();await Promise.resolve();
+ t.mock.timers.tick(45000);await Promise.resolve();assert.equal(p.data.aiBusy,true);
+ t.mock.timers.tick(25000);await pending;assert.equal(p.data.aiBusy,false);assert.equal(p.data.aiPrompt,'自然');assert.deepEqual(p.state(),before);assert.deepEqual(toasts,['调色耗时较长，请稍后重试']);
+ resolve({result:{ok:true,status:'ok',values:{...config.defaults(),contrast:80},summary:'完成'}});await Promise.resolve();assert.deepEqual(p.state(),before);
+});

@@ -16,7 +16,16 @@ const editor = {
   data: {
     savedPresets:[],selectedPresetId:'',photoCheckStatus:'',captionChecking:false,presetChecking:false,
     aiPrompt:'',aiBusy:false,aiStatus:'描述你想要的亮度、冷暖或色彩风格',aiKeyboardHeight:0,
-    aiSuggestions:['自然通透，保留真实色彩','暖调胶片，柔和一点','冷调电影感，控制高光'],
+    aiSuggestions:[
+      {label:'自然通透',prompt:'自然通透，保留真实色彩'},
+      {label:'暖调胶片',prompt:'暖调胶片，柔和一点'},
+      {label:'冷调电影',prompt:'冷调电影感，控制高光'},
+      {label:'清新日系',prompt:'清新日系风格，明亮柔和，颜色清淡'},
+      {label:'复古质感',prompt:'复古暖调，降低饱和度，轻轻抬起黑色色阶'},
+      {label:'黑白光影',prompt:'黑白摄影风格，增强明暗层次，保留高光和阴影细节'},
+      {label:'柔和人像',prompt:'整体调色柔和自然，保留真实肤色，避免过度饱和'},
+      {label:'夜景通透',prompt:'夜景更通透，压低刺眼高光，适度提亮阴影，保持夜晚氛围'}
+    ],
     ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'ai',label:'AI 调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
@@ -55,7 +64,7 @@ const editor = {
     for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
     this.source = this.image = this._photoCheck = null;
   },
-  onHide(){this.compareEnd();},
+  onHide(){this.compareEnd();this.resetAiKeyboard();},
   onResize() { if(this.canvas) this.measure(); },
   createCanvas(width, height) { return wx.createOffscreenCanvas({type:'2d',width,height}); },
   async initialize() {
@@ -254,7 +263,7 @@ const editor = {
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
   compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
   compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
-  switchTab(e){this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
+  switchTab(e){if(e.currentTarget.dataset.key!=='ai')this.resetAiKeyboard();this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
   applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},

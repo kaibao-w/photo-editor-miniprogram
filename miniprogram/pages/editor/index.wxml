@@ -9,6 +9,10 @@
   <view class="stage" style="height:{{stageHeight}}px">
     <view class="preview-surface">
     <canvas type="2d" id="preview" class="preview {{ready ? '' : 'canvas-idle'}}" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
+    <view wx:if="{{aiBusy && ready}}" class="ai-loading" aria-role="status" aria-label="AI 正在调色">
+      <view class="ai-loading-sweep"><view class="ai-loading-line"></view></view>
+      <view class="ai-loading-badge"><view class="ai-loading-wave"><view></view><view></view><view></view><view></view></view><text>正在调色</text></view>
+    </view>
     <view class="empty" wx:if="{{!ready}}"><view class="empty-title">从一张照片开始</view><text>选择相册图片或拍一张照片</text><button class="primary" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">选择图片</button></view>
     </view>
     <view class="stage-footer">
@@ -20,7 +24,7 @@
   </view>
   <view class="dock">
     <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab"><text>{{item.label}}</text><view wx:if="{{item.key==='frame'}}" class="frame-tab-switch {{frame.enabled?'on':''}} {{!ready || busy?'disabled':''}}" catchtap="toggleFrameTab"><view class="frame-tab-knob"></view></view></button></view>
-    <scroll-view class="panel" scroll-y enhanced show-scrollbar="{{false}}">
+    <scroll-view wx:if="{{tab!=='ai'}}" class="panel" scroll-y enhanced show-scrollbar="{{false}}">
       <view class="panel-inner {{tab==='frame'?'frame-panel':'adjust-panel'}}" wx:if="{{tab==='adjust' || tab==='frame'}}">
         <scroll-view wx:if="{{tab==='adjust'}}" class="parameter-list color-list" scroll-x enhanced show-scrollbar="{{false}}"><view class="parameter-row color-parameters"><button wx:for="{{adjustList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{selected===item.key?'chosen':''}}"><text class="parameter-icon">{{item.icon}}</text><text class="parameter-label {{item.key==='vibrance'?'parameter-label-long':''}}">{{item.label}}</text></button></view></scroll-view>
         <view wx:else class="parameter-list frame-list"><view class="parameter-row frame-parameters"><button wx:for="{{frameList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{frameSelected===item.key?'chosen':''}}"><text>{{item.label}}</text></button></view></view>
@@ -37,11 +41,6 @@
         </view>
         <view class="preset-actions"><button bindtap="importPreset">导入预设码</button><button class="primary" bindtap="savePreset" disabled="{{!ready || busy}}">＋ 保存为预设</button></view>
       </view>
-      <view wx:elif="{{tab==='ai'}}" class="panel-inner ai-panel">
-        <scroll-view class="ai-suggestions" scroll-x show-scrollbar="{{false}}"><view class="ai-suggestion-strip"><button wx:for="{{aiSuggestions}}" wx:key="*this" data-prompt="{{item}}" bindtap="aiSuggestion" disabled="{{aiBusy}}">{{item}}</button></view></scroll-view>
-        <view class="ai-composer"><input value="{{aiPrompt}}" placeholder="{{ready?'描述你想要的效果…':'先选择一张照片'}}" maxlength="300" bindinput="aiInput" bindconfirm="sendAi" confirm-type="send" adjust-position="{{false}}" bindkeyboardheightchange="aiKeyboard" disabled="{{!ready || aiBusy || busy}}"/><button wx:if="{{aiBusy}}" bindtap="cancelAi">取消</button><button wx:else class="primary" bindtap="sendAi" disabled="{{!ready || busy || !aiPrompt}}">发送</button></view>
-        <view class="ai-result"><text>{{aiStatus}}</text><button bindtap="savePreset" disabled="{{!ready || busy || aiBusy}}">保存预设</button></view>
-      </view>
       <view wx:else class="panel-inner">
         <view class="history-actions"><button bindtap="undo" disabled="{{!canUndo || busy}}">↶ 上一步</button><button bindtap="redo" disabled="{{!canRedo || busy}}">↷ 下一步</button><button bindtap="markStep" disabled="{{!ready || busy}}">{{marked?'★ 取消标记':'☆ 标记当前'}}</button></view>
         <view wx:if="{{!ready}}" class="status">选图后自动记录调色和画框步骤</view>
@@ -49,6 +48,13 @@
         <view class="status">返回后继续调整会保留旧记录。换图或关闭页面会清空步骤。</view>
       </view>
     </scroll-view>
+      <view wx:else class="panel-inner ai-panel">
+        <view class="ai-composer">
+          <view class="ai-input-wrap"><input value="{{aiPrompt}}" placeholder="{{ready?'描述效果，如：暖一点，保留高光':'先选择一张照片'}}" placeholder-class="ai-placeholder" maxlength="300" bindinput="aiInput" bindconfirm="sendAi" confirm-type="send" adjust-position="{{false}}" bindfocus="aiFocus" bindblur="aiBlur" bindkeyboardheightchange="aiKeyboard" disabled="{{!ready || aiBusy || busy}}"/></view>
+          <button wx:if="{{aiBusy}}" class="ai-send ai-cancel" bindtap="cancelAi">取消</button><button wx:else class="primary ai-send" bindtap="sendAi" disabled="{{!ready || busy || !aiPrompt}}">调色</button>
+        </view>
+        <view class="ai-ideas"><text class="ai-ideas-label">试试</text><scroll-view class="ai-suggestions" scroll-x enhanced show-scrollbar="{{false}}"><view class="ai-suggestion-strip"><button wx:for="{{aiSuggestions}}" wx:key="label" data-prompt="{{item.prompt}}" bindtap="aiSuggestion" class="{{aiPrompt===item.prompt?'chosen':''}}" disabled="{{!ready || aiBusy || busy}}">{{item.label}}</button></view></scroll-view></view>
+      </view>
 
   </view>
   <canvas type="2d" id="ai-canvas" class="export-canvas"></canvas>

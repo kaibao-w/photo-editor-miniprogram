@@ -1,6 +1,6 @@
 const config=require('./config');
 const cloudConfig=config.cloud;
-const messages={UNAVAILABLE:'AI 暂时不可用，请稍后再试',RATE_LIMIT:'使用较频繁或今日额度已用完，请稍后再试',FAILED:'调色未完成，请稍后重试'};
+const messages={UNAVAILABLE:'AI 暂时不可用，请稍后再试',RATE_LIMIT:'操作太快，请稍等 5 秒再试',TIMEOUT:'调色耗时较长，请稍后重试',FAILED:'调色未完成，请稍后重试'};
 function validate(raw){
   // Older deployed functions return eight fields; retain neutral defaults for the new controls.
   raw={whites:0,blacks:0,vibrance:0,...raw};
@@ -27,10 +27,22 @@ function diagnostic(error){
 module.exports={
   aiInput(e){this.setData({aiPrompt:e.detail.value});},
   aiSuggestion(e){if(!this.data.aiBusy)this.setData({aiPrompt:e.currentTarget.dataset.prompt});},
+  aiFocus(){this._aiInputFocused=true;},
+  aiBlur(){this.resetAiKeyboard();},
+  resetAiKeyboard(){
+    this._aiInputFocused=false;
+    this.setAiKeyboardHeight(0);
+  },
+  setAiKeyboardHeight(height){
+    if(this.data.aiKeyboardHeight===height)return;
+    // Measure only after the workspace has received its restored height.
+    this.setData({aiKeyboardHeight:height},()=>{if(this._alive&&this.canvas)this.measure();});
+  },
   aiKeyboard(e){
     const height=Math.max(0,Number(e.detail.height)||0);
-    this.setData({aiKeyboardHeight:height});
-    if(this.canvas)this.measure();
+    // Ignore late opening events after blur or after leaving the AI tab.
+    if(height>0&&(!this._aiInputFocused||this.data.tab!=='ai'))return;
+    this.setAiKeyboardHeight(height);
   },
   cancelAi(){
     this._aiRequest=(this._aiRequest||0)+1;
@@ -67,7 +79,7 @@ module.exports={
     let timer,stage='consent';
     try{
       if(!this._aiConsent){
-        const answer=await api('showModal',{title:'使用 AI 调色',content:'将发送照片缩略图、调色参数和你的描述至微信云函数及阿里云百炼，用于生成调色建议。原图保留在设备上；服务端不主动存储图片，模型服务的数据处理规则见隐私保护指引。是否同意并继续？',confirmText:'同意使用'});
+        const answer=await api('showModal',{title:'开启 AI 调色',content:'AI 将根据照片和你的想法生成调色方案。照片缩略图、当前调色参数及你的描述将通过微信云函数发送至阿里云百炼，原图不会上传。详情见隐私保护指引。',confirmText:'同意使用',cancelText:'暂不使用'});
         if(!active())return;
         if(!answer.confirm){this.setData({aiStatus:'未发送照片，可继续手动调色'});return;}
         this._aiConsent=true;
@@ -85,7 +97,7 @@ module.exports={
       stage='cloudFunction';
       const response=await Promise.race([
         wx.cloud.callFunction({name:cloudConfig.functionName,config:{env:cloudConfig.env},data:{image,prompt,values}}),
-        new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('AI_TIMEOUT')),45000);this._aiCancel=()=>resolve(null);})
+        new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('AI_TIMEOUT')),70000);this._aiCancel=()=>resolve(null);})
       ]);
       if(!active())return;
       if(this.source!==source || (this._editRevision||0)!==revision || this.data.busy){this.setData({aiStatus:'当前编辑已改变，未覆盖；请重新发送'});return;}
@@ -95,7 +107,7 @@ module.exports={
         const details={stage,code:result&&Object.prototype.hasOwnProperty.call(messages,result.code)?result.code:'INVALID_RESPONSE'};
         details.environment=cloudConfig.env;
         details.functionName=cloudConfig.functionName;
-        details.clientVersion='aiGrade.20261022.4';
+        details.clientVersion='aiGrade.20261022.6';
         const version=result&&result.version;
         details.serverVersion=typeof version==='string'&&/^[A-Za-z0-9_.-]{1,80}$/.test(version)?version:'UNKNOWN';
         const requestId=response&&response.requestID;
@@ -110,7 +122,7 @@ module.exports={
         const message=messages[result&&result.code]||messages.FAILED;
         this.setData({aiStatus:message});wx.showToast({title:message,icon:'none'});return;
       }
-      if(result.status==='unsupported'){this.setData({aiStatus:'目前支持整体调色，请尝试描述亮度、冷暖或色彩风格'});return;}
+      if(result.status==='unsupported'){this.setData({aiStatus:'目前支持整体调色，请尝试描述亮度、冷暖或色彩风格'});wx.showToast({title:'目前仅支持整体调色',icon:'none'});return;}
       if(result.status!=='ok')throw Error('INVALID_AI_RESULT');
       const next=validate(result.values);
       if(typeof result.summary!=='string'||result.summary.length>100)throw Error('INVALID_AI_RESULT');
@@ -121,7 +133,7 @@ module.exports={
       if(active()){
         console.warn('AI 调色失败',{stage,...diagnostic(error)});
         this.setData({aiStatus:'调色未完成，当前效果已保留，请重试'});
-        wx.showToast({title:'调色未完成，请重试',icon:'none'});
+        wx.showToast({title:error.message==='AI_TIMEOUT'?messages.TIMEOUT:'调色未完成，请重试',icon:'none'});
       }
     }finally{
       clearTimeout(timer);
