@@ -49,7 +49,7 @@ const editor = {
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
     for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
-    this.source = this.image = this._photoCheck = null;
+    this.source = this.image = this._photoCheck = this._dragSource = this._dragSourceOwner = this._previewPixels = null;
   },
   onHide(){this.compareEnd();},
   onResize() { if(this.canvas) this.measure(); },
@@ -115,7 +115,7 @@ const editor = {
         if(!this._alive||this._photoCheck!==record)return false;
         record.error=error;record.passUntil=0;
         if(error.safety==='blocked'){
-          this.source=this.image=this.history=null;this.slider=this.gesture=null;this._captionDraft=undefined;
+          this.source=this.image=this.history=this._dragSource=this._dragSourceOwner=this._previewPixels=null;this.slider=this.gesture=null;this._captionDraft=undefined;
           this.setData({ready:false,photoCheckStatus:'blocked',history:[],canUndo:false,canRedo:false,comparing:false});this.drawView();
           if(!this.data.exporting)this.error(error);
         }else if(error.safety!=='cancel')this.setData({photoCheckStatus:'retry'});
@@ -202,7 +202,7 @@ const editor = {
       if(!this._alive)return;
       this._captionDraft=undefined;
       this._photoCheck={prepared,passUntil:0};
-      this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;
+      this.image=image;this.originalWidth=w;this.originalHeight=h;this.source=pixels;this._dragSource=this._dragSourceOwner=null;
       this.initializePhotoEdits();
       if(this.pendingPreset){const row=this.pendingPreset;this.pendingPreset=null;this.values={...row.values};if(row.frame)this.frame={...this.frame,...row.frame};this.setData({selectedPresetId:row.id});this.history.record(this.state(),'预设 · '+row.name);}
       this.setData({ready:true,comparing:false,tab:'presets'});
@@ -224,16 +224,31 @@ const editor = {
   schedule() {
     // Coalesce updates without postponing the pending preview during continuous dragging.
     if(this._timer != null || !this._alive)return;
-    this._timer=setTimeout(()=>{this._timer=null;if(this._alive)this.render();},16);
+    this._timer=setTimeout(()=>{this._timer=null;if(this._alive){if(this._sliderSync){this._sliderSync=false;this.sync();}this.render();}},16);
+  },
+  previewSource() {
+    if(!this.slider || this.slider.axis!=='horizontal' || Math.max(this.source.width,this.source.height)<=600)return this.source;
+    if(this._dragSourceOwner===this.source)return this._dragSource;
+    const source=this.source,scale=600/Math.max(source.width,source.height);
+    const full=this.createCanvas(source.width,source.height),small=this.createCanvas(Math.max(1,Math.round(source.width*scale)),Math.max(1,Math.round(source.height*scale)));
+    try {
+      const c=full.getContext('2d'),pixels=c.createImageData(source.width,source.height);pixels.data.set(source.data);c.putImageData(pixels,0,0);
+      const target=small.getContext('2d');target.drawImage(full,0,0,small.width,small.height);
+      this._dragSource=target.getImageData(0,0,small.width,small.height);this._dragSourceOwner=source;
+      return this._dragSource;
+    } finally {full.width=full.height=small.width=small.height=1;}
   },
   render() {
     if(!this.source || !this._alive) return;
     try {
-      const {width:w,height:h}=this.source;this.photo.width=w;this.photo.height=h;this.composite.width=w;this.composite.height=h;
-      const c=this.photo.getContext('2d'),pixels=c.createImageData(w,h);pixels.data.set(this.source.data);
+      const source=this.previewSource(),{width:w,height:h}=source;
+      for(const canvas of [this.photo,this.composite]){if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}
+      const c=this.photo.getContext('2d');
+      if(!this._previewPixels || this._previewPixels.width!==w || this._previewPixels.height!==h)this._previewPixels=c.createImageData(w,h);
+      const pixels=this._previewPixels;pixels.data.set(source.data);
       if(!this.data.comparing)grade(pixels,this.values);c.putImageData(pixels,0,0);
       const output=this.composite.getContext('2d');
-      if(this.frame.enabled)composeFrame(this.photo,output,this.frame,(w,h)=>this.createCanvas(w,h));else output.drawImage(this.photo,0,0);
+      if(this.frame.enabled)composeFrame(this.photo,output,this.frame,(w,h)=>this.createCanvas(w,h),this.slider&&this.slider.axis==='horizontal'?160:320);else {output.clearRect(0,0,w,h);output.drawImage(this.photo,0,0);}
       this.drawView();
     } catch(error) {this.error(error,'预览失败，请尝试较小的图片');}
   },
@@ -242,7 +257,7 @@ const editor = {
     const {width:w,height:h}=this.rect;this.ctx.setTransform(this.dpr,0,0,this.dpr,0,0);this.ctx.fillStyle='#050605';this.ctx.fillRect(0,0,w,h);
     if(!this.source)return;const ratio=this.source.height/this.source.width;this.view=bounds(this.view,w,h,ratio);
     const pw=w*this.view.zoom,ph=pw*ratio;this.ctx.drawImage(this.composite,(w-pw)/2+this.view.x,(h-ph)/2+this.view.y,pw,ph);
-    this.setData({zoomLabel:Math.round(this.view.zoom*100)+'%'});
+    const zoomLabel=Math.round(this.view.zoom*100)+'%';if(zoomLabel!==this.data.zoomLabel)this.setData({zoomLabel});
   },
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
   compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
@@ -250,7 +265,7 @@ const editor = {
   switchTab(e){this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
-  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
+  applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.setData({selectedPresetId:''});this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
   toggleFrameTab(){if(!this.source || this.data.busy)return;this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
   captionInput(e){if(!this.source || this.data.busy)return;this._captionDraft=e.detail.value;},
   async captionBlur(){
@@ -276,9 +291,11 @@ const editor = {
     const g=this.slider;if(!g || !e.touches.length)return;const t=e.touches[0],dx=t.clientX-g.x,dy=t.clientY-g.y;
     if(!g.axis){if(Math.abs(dy)>=8&&Math.abs(dy)>=Math.abs(dx))g.axis='vertical';else if(Math.abs(dx)>=10&&Math.abs(dx)>Math.abs(dy)*1.4)g.axis='horizontal';else return;}
     if(g.axis!=='horizontal')return;const {min,max,step}=g.def;
-    (g.frame?this.frame:this.values)[g.key]=Number(Math.max(min,Math.min(max,Math.round((g.start+dx/g.width*(max-min))/step)*step)).toFixed(4));this.edit();
+    const target=g.frame?this.frame:this.values,value=Number(Math.max(min,Math.min(max,Math.round((g.start+dx/g.width*(max-min))/step)*step)).toFixed(4));
+    if(target[g.key]===value)return;target[g.key]=value;
+    if(this.data.comparing)this.setData({comparing:false});this._sliderSync=true;this.schedule();
   },
-  sliderEnd(){if(this.slider && this.slider.axis==='horizontal')this.commit(this.slider.def.label+'调整');this.slider=null;},
+  sliderEnd(){const g=this.slider;this.slider=null;if(g && g.axis==='horizontal'){this._sliderSync=false;this.sync();this.commit(g.def.label+'调整');this.schedule();}},
   sliderCancel(){if(this.slider){(this.slider.frame?this.frame:this.values)[this.slider.key]=this.slider.start;this.slider=null;this.edit();}},
   restore(state){if(!state)return;this.values=state.values;this.frame=state.frame;this.edit();this.syncHistory();},
   undo(){if(!this.data.busy&&this.history)this.restore(this.history.undo());},

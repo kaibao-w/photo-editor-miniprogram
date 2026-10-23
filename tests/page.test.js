@@ -226,3 +226,49 @@ test('saving preset previews before approval and persists only after success',as
  assert.equal(p.data.savedPresets[0].name,'旅行');assert.equal(rows.length,0);
  resolve();await pending;assert.equal(rows[0].name,'旅行');assert.equal(p.data.savedPresets[0].id,rows[0].id);
 });
+
+
+test('recommended preset takes selection back from an identical saved preset',async()=>{
+ for(const preset of definition.data.presets){
+  const p=page();p.source={};let rows=[];
+  global.wx={showModal:o=>o.success({confirm:true,content:'我的'+preset.label}),getStorageSync:()=>rows,setStorageSync:(k,v)=>{rows=v;},showToast(){}};
+  const event={currentTarget:{dataset:{key:preset.key}}};
+  p.applyPreset(event);
+  const expected=p.state();
+  await p.savePreset();
+  await p.applySavedPreset({currentTarget:{dataset:{id:rows[0].id}}});
+  assert.equal(p.data.selectedPresetId,rows[0].id);
+  assert.equal(p.data.preset,'');
+  p.applyPreset(event);
+  assert.equal(p.data.selectedPresetId,'');
+  assert.equal(p.data.preset,preset.key);
+  assert.deepEqual(p.state(),expected);
+  await p.applySavedPreset({currentTarget:{dataset:{id:rows[0].id}}});
+  assert.equal(p.data.selectedPresetId,rows[0].id);
+  assert.equal(p.data.preset,'');
+ }
+});
+
+
+test('drag preview caches reduced source, restores full size and refreshes for a new photo',()=>{
+ const p=page();let allocations=0;
+ p.createCanvas=(width,height)=>{allocations++;return {width,height,getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){},drawImage(){},getImageData:(x,y,w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)})};}};};
+ p.source={width:1200,height:800,data:new Uint8ClampedArray(1200*800*4)};
+ const original=p.source;p.slider={axis:'horizontal'};
+ const reduced=p.previewSource();assert.equal(reduced.width,600);assert.equal(reduced.height,400);
+ assert.equal(p.previewSource(),reduced);assert.equal(allocations,2);assert.equal(p.source,original);
+ p.slider=null;assert.equal(p.previewSource(),original);
+ p.source={width:800,height:1200,data:new Uint8ClampedArray(800*1200*4)};p.slider={axis:'horizontal'};
+ assert.equal(p.previewSource().height,600);assert.equal(p.previewSource().width,400);assert.equal(allocations,4);
+});
+
+test('drag bursts coalesce UI updates and release renders full quality with final values',t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const p=page();p.source={};p.schedule=definition.schedule;let syncs=0;const renders=[];
+ const sync=p.sync;p.sync=function(){syncs++;sync.call(this);};p.render=()=>renders.push({dragging:!!p.slider,value:p.values.exposure});
+ p.sliderStart({touches:[{clientX:10,clientY:10}]});
+ for(const x of [30,40,50,60])p.sliderMove({touches:[{clientX:x,clientY:10}]});
+ assert.equal(syncs,0);t.mock.timers.tick(16);assert.equal(syncs,1);assert.equal(renders.length,1);assert.equal(renders[0].dragging,true);
+ const value=p.values.exposure;p.sliderEnd();t.mock.timers.tick(16);
+ assert.deepEqual(renders.at(-1),{dragging:false,value});assert.equal(p.data.parameterValue,value);assert.equal(p.history.items.length,2);
+});
