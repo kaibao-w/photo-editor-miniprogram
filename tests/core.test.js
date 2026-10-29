@@ -33,3 +33,17 @@ test('interactive frame composition reuses its canvas and never reads pixels bac
  let exported;composeFrame(photo,out,f,(w,h)=>(exported=create(w,h)),320);
  assert.equal(exported.width,0);assert.equal(reads,2);
 });
+
+test('jumping to a middle step enables forward navigation to the end',()=>{
+ const h=new History({value:0});for(let value=1;value<=4;value++)h.record({value},String(value));
+ h.goto(1);assert.equal(h.canRedo,true);assert.equal(h.redo().value,2);assert.equal(h.redo().value,3);assert.equal(h.redo().value,4);
+ assert.equal(h.canRedo,false);assert.equal(h.redo(),null);
+ h.goto(0);assert.equal(h.redo().value,1);
+});
+test('forward follows actual branches and respects the branch just undone',()=>{
+ const h=new History({value:0});h.record({value:1},'one');h.record({value:2},'old branch');
+ h.goto(1);h.record({value:3},'new branch');h.record({value:4},'new end');
+ h.goto(1);assert.equal(h.redo().value,3);assert.equal(h.redo().value,4);
+ h.goto(2);assert.equal(h.canRedo,false);h.undo();assert.equal(h.redo().value,2);
+ h.goto(1);h.record({value:5},'third branch');assert.equal(h.canRedo,false);h.undo();assert.equal(h.redo().value,5);
+});

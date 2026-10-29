@@ -1,3 +1,5 @@
+const cropTools=require('../../utils/crop');
+const cropEditor=require('../../utils/crop-editor');
 const {GPUPreview}=require('../../utils/gpu-preview');
 const loading=require('../../utils/loading');
 const contentSafety=require('../../utils/content-safety');
@@ -12,13 +14,15 @@ const isPrivacyScopeError = error => !!error && (error.errno===112 || error.errN
 const icons={exposure:'☼',contrast:'◐',dehaze:'≋',highlights:'☀',shadows:'◒',saturation:'◉',temperature:'◑',tint:'◈'};
 const list = rows => rows.map(([key, label, min, max, step]) => ({ key, label, min, max, step, icon:icons[key] || '' }));
 const editor = {
+  ...cropEditor,
   data: {
+    cropping:false,cropRatio:'free',cropRatios:[{key:'free',label:'自由'},{key:'original',label:'原比例'},{key:'square',label:'1:1'},{key:'portrait',label:'3:4'},{key:'landscape',label:'4:3'},{key:'story',label:'9:16'},{key:'wide',label:'16:9'}],
     savedPresets:[],selectedPresetId:'',photoCheckStatus:'',captionChecking:false,presetChecking:false,
-    ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
+    ready: false, busy: false, selectingPhoto:false, exporting:false, tab: 'presets', tabs: [{key:'crop',label:'裁剪'},{key:'presets',label:'预设'},{key:'adjust',label:'调色'},{key:'frame',label:'画框'},{key:'history',label:'步骤'}],
     stageHeight: 360, adjustList: list(config.adjustments), frameList: list(config.frames),
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
-    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'},{key:'film',label:'胶片'},{key:'mono',label:'黑白'}], preset: '',
+    presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'autumnSun',label:'秋日暖阳'},{key:'autumnFilm',label:'秋野胶片'},{key:'warm',label:'暖色'},{key:'film',label:'胶片'},{key:'mono',label:'黑白'}], preset: '',
     sliderMin:-200,sliderMax:200,sliderStep:5,sliderValue:0,
     label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
@@ -52,7 +56,7 @@ const editor = {
     if(this._gpu)this._gpu.dispose();this._gpu=null;
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
-    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite, this._frameCache&&this._frameCache.canvas, this._gpuBackground]) if(canvas) {canvas.width=1;canvas.height=1;}
+    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite, this._frameCache&&this._frameCache.canvas, this._gpuBackground,this._cropPhoto]) if(canvas) {canvas.width=1;canvas.height=1;}
     this._frameCache=this._gradedSource=null;
     this.source = this.image = this._photoCheck = this._dragSource = this._dragSourceOwner = this._previewPixels = null;
   },
@@ -141,7 +145,7 @@ const editor = {
       if(!passed)throw record.error||contentSafety.failure('unavailable');
     }finally{finish();}
   },
-  state() {return {values:{...this.values},frame:{...this.frame}};},
+  state() {return {crop:this.crop?{...this.crop}:null,values:{...this.values},frame:{...this.frame}};},
   sync() {
     const frameMode=this.data.tab==='frame'; const key=frameMode?this.data.frameSelected:this.data.selected;
     const def=(frameMode?this.data.frameList:this.data.adjustList).find(d=>d.key===key);
@@ -155,7 +159,7 @@ const editor = {
   syncHistory() {
     if(!this.history) return;
     this.setData({history:this.history.items.map((s,index)=>({index,label:s.label,marked:s.marked,parent:s.parent})).reverse(),current:this.history.current,
-      canUndo:this.history.items[this.history.current].parent!==null,canRedo:!!this.history.redos.length,marked:this.history.items[this.history.current].marked});
+      canUndo:this.history.items[this.history.current].parent!==null,canRedo:this.history.canRedo,marked:this.history.items[this.history.current].marked});
   },
   commit(label) {if(this.history){this.history.record(this.state(),label);this.syncHistory();}},
   edit(label) {this.setData({comparing:false});this.sync();this.schedule();if(label)this.commit(label);},
@@ -222,6 +226,7 @@ const editor = {
     finally {if(this._alive)this.setData({busy:false,selectingPhoto:false});}
   },
   initializePhotoEdits(){
+    this.crop=null;this.cropDraft=null;this.setData({cropping:false});
     this.values=config.defaults();this.frame={...config.frameDefaults};this.history=new History(this.state());
     this.values={...config.defaults(),...config.presets.night};
     this.frame={...config.frameDefaults,caption:'微光快调 - 冷调'};
@@ -255,6 +260,7 @@ const editor = {
     } finally {full.width=full.height=small.width=small.height=1;}
   },
   render() {
+    if(this.data.cropping){this.drawCropView();return;}
     if(!this.source || !this._alive) return;
     try {
       if(!this._gpuDisabled&&typeof wx.createOffscreenCanvas==='function'){
@@ -291,6 +297,7 @@ const editor = {
     } catch(error) {this.error(error,'预览失败，请尝试较小的图片');}
   },
   drawView() {
+    if(this.data.cropping){this.drawCropView();return;}
     if(!this.ctx || !this.rect) return;
     const {width:w,height:h}=this.rect;this.ctx.setTransform(this.dpr,0,0,this.dpr,0,0);this.ctx.fillStyle='#050605';this.ctx.fillRect(0,0,w,h);
     if(!this.source)return;const ratio=this.source.height/this.source.width;this.view=bounds(this.view,w,h,ratio);
@@ -300,11 +307,11 @@ const editor = {
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
   compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
   compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
-  switchTab(e){if(this.slider)this.sliderCancel();this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
+  switchTab(e){if(e.currentTarget.dataset.key==='crop'){if(!this.data.cropping)this.beginCrop();return;}if(this.data.cropping)this.cancelCrop();if(this.slider)this.sliderCancel();this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
-  reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
+  reset(){if(!this.source || this.data.busy)return;if(this.crop){this.crop=null;this.rebuildCrop();}this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
   applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.setData({selectedPresetId:''});this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
-  toggleFrameTab(){if(!this.source || this.data.busy)return;this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
+  toggleFrameTab(){if(!this.source || this.data.busy)return;if(this.data.cropping)this.cancelCrop();this.frame.enabled=!this.frame.enabled;const label=this.frame.enabled?'启用画框':'关闭画框';this.setData({tab:'frame'},()=>this.edit(label));},
   captionInput(e){if(!this.source || this.data.busy)return;this._captionDraft=e.detail.value;},
   async captionBlur(){
     if(this._captionPromise)return this._captionPromise;
@@ -359,7 +366,7 @@ const editor = {
   },
   sliderEnd(){const g=this.slider;this.slider=null;if(g && g.axis==='horizontal'){this._sliderSync=false;this.sync();this.commit(g.def.label+'调整');this.schedule();}},
   sliderCancel(){if(this.slider){(this.slider.frame?this.frame:this.values)[this.slider.key]=this.slider.start;this.slider=null;this.edit();}},
-  restore(state){if(!state)return;this.values=state.values;this.frame=state.frame;this.edit();this.syncHistory();},
+  restore(state){if(!state)return;const changed=JSON.stringify(this.crop||null)!==JSON.stringify(state.crop||null);this.crop=state.crop||null;if(changed)this.rebuildCrop();this.values=state.values;this.frame=state.frame;this.edit();this.syncHistory();},
   undo(){if(!this.data.busy&&this.history)this.restore(this.history.undo());},
   redo(){if(!this.data.busy&&this.history)this.restore(this.history.redo());},
   gotoStep(e){if(!this.data.busy&&this.history)this.restore(this.history.goto(Number(e.currentTarget.dataset.index)));},
@@ -369,8 +376,9 @@ const editor = {
     if(!touches.length){this.gesture=null;return;}const a=this.point(touches[0]),b=touches[1]&&this.point(touches[1]);
     this.gesture={...this.view,n:touches.length,center:b?{x:(a.x+b.x)/2,y:(a.y+b.y)/2}:a,distance:b?Math.max(1,Math.hypot(b.x-a.x,b.y-a.y)):0};
   },
-  viewStart(e){if(!this.source)return;this.startGesture(e.touches);this.tap=e.touches.length===1?{time:Date.now(),...this.point(e.touches[0])}:null;if(e.touches.length>1)this.lastTap=null;},
+  viewStart(e){if(this.data.cropping){this.cropTouchStart(e);return;}if(!this.source)return;this.startGesture(e.touches);this.tap=e.touches.length===1?{time:Date.now(),...this.point(e.touches[0])}:null;if(e.touches.length>1)this.lastTap=null;},
   viewMove(e){
+    if(this.data.cropping){this.cropTouchMove(e);return;}
     if(!this.gesture || !e.touches.length)return;if(e.touches.length!==this.gesture.n){this.startGesture(e.touches);return;}
     const a=this.point(e.touches[0]),b=e.touches[1]&&this.point(e.touches[1]),g=this.gesture;
     if(this.tap&&Math.hypot(a.x-this.tap.x,a.y-this.tap.y)>8)this.tap=null;
@@ -378,24 +386,27 @@ const editor = {
     this.view={zoom,x:center.x-(g.center.x-g.x)*r,y:center.y-(g.center.y-g.y)*r};this.drawView();
   },
   viewEnd(e){
+    if(this.data.cropping){this.cropTouchEnd(e);return;}
     if(this.tap && !e.touches.length && Date.now()-this.tap.time<280){const t=this.tap;
       if(this.lastTap&&Date.now()-this.lastTap.time<320&&Math.hypot(t.x-this.lastTap.x,t.y-this.lastTap.y)<24){if(this.view.zoom>1.05)this.fitView();else {this.view=zoomAt(this.view,2,t.x,t.y);this.drawView();}this.lastTap=null;}else this.lastTap=t;}
     this.tap=null;this.startGesture(e.touches);
   },
-  viewCancel(){this.tap=this.lastTap=this.gesture=null;},
+  viewCancel(){this._cropGesture=null;this.tap=this.lastTap=this.gesture=null;},
   changeFormat(e){this.setData({formatIndex:Number(e.detail.value)});},
   async exportPhoto(){
+    if(this.data.cropping)return;
     if(!this.source || this.data.exporting || (this.data.busy&&!this._captionPromise))return;
     if(!await this.captionBlur() || !this._alive || this.data.busy)return;
     this.setData({busy:true,exporting:true});
     const state=this.state(),type=this.data.formatIndex?'png':'jpg';
-    const size=exportSize(this.originalWidth,this.originalHeight,true);let photo,finishLoading;
+    const crop=state.crop||cropTools.full(),oriented=cropTools.dimensions(this.originalWidth,this.originalHeight,crop.rotation);
+    const size=exportSize(Math.max(1,Math.round(oriented.width*crop.w)),Math.max(1,Math.round(oriented.height*crop.h)),true);let photo,finishLoading;
     try {
       await this.ensurePhotoApproved();
       if(!this._alive||!this.source)return;
       finishLoading=loading.begin('正在生成图片');await pause();
       photo=this.createCanvas(size.width,size.height);const pc=photo.getContext('2d');
-      if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}pc.drawImage(this.image,0,0,size.width,size.height);
+      if(type==='jpg'){pc.fillStyle='#fff';pc.fillRect(0,0,size.width,size.height);}cropTools.drawCrop(pc,this.image,crop,size.width,size.height);
       for(let y=0;y<size.height;y+=128){const h=Math.min(128,size.height-y);pc.putImageData(grade(pc.getImageData(0,y,size.width,h),state.values),0,y);await pause();if(!this._alive)return;}
       this.exportCanvas.width=size.width;this.exportCanvas.height=size.height;const out=this.exportCanvas.getContext('2d');
       if(state.frame.enabled)composeFrame(photo,out,state.frame,(w,h)=>this.createCanvas(w,h));else out.drawImage(photo,0,0);

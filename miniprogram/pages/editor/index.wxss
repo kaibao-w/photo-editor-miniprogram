@@ -146,3 +146,20 @@
 .frame-tab-switch.on .frame-tab-knob{left:12px;background:var(--accent-ink)}
 
 .slider-row .native-slider{flex:1;min-width:0;margin:0 10px;height:36px}
+
+/* Crop dock shares the fixed editor height; ratios hint at horizontal overflow. */
+.crop-hint{height:36px;flex:none;display:flex;align-items:center;justify-content:center;font-size:10px;letter-spacing:.4px;color:var(--text-2);border-top:1px solid var(--border)}
+.crop-panel{height:100%;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:10px;padding:8px 12px}
+.crop-ratios{width:100%;height:54px;flex:none;white-space:nowrap}
+.crop-ratio-strip{display:flex;gap:6px;width:100%;height:54px}
+.crop-ratio-strip .crop-ratio{flex:0 0 calc(18.1818% - 5px);width:calc(18.1818% - 5px);min-width:0;height:54px;padding:5px 0;margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:1px solid transparent;background:transparent;border-radius:9px;color:var(--text-2);font-size:10px;line-height:14px;font-weight:400}
+.crop-ratio-strip .is-selected{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+.ratio-symbol{width:22px;height:17px;border:1px solid currentColor;border-radius:2px;box-sizing:border-box}
+.ratio-free{border-style:dashed}.ratio-square{width:19px;height:19px}.ratio-portrait{width:15px;height:20px}.ratio-story{width:12px;height:21px}.ratio-wide{width:24px;height:14px}
+/* Explicit widths prevent native button sizing from crowding the confirmation text. */
+.crop-actions{height:34px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;width:100%}
+.crop-tools,.crop-confirm-actions{display:flex;align-items:center;flex:0 0 auto;min-width:0}
+.crop-tools{gap:6px}.crop-confirm-actions{gap:2px}
+.crop-actions button{flex:0 0 auto;width:60px;min-width:0;margin:0;padding:0;height:34px;min-height:34px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;line-height:1;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:8px;background:var(--raised);color:var(--text-2)}
+.crop-confirm-actions .crop-cancel{width:44px;background:transparent;border-color:transparent}
+.crop-confirm-actions .crop-done{width:88px;padding:0 12px;background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}

@@ -3,7 +3,7 @@
     <button class="toolbar-button toolbar-choose" size="mini" bindtap="choosePhoto" disabled="{{selectingPhoto || exporting || !canvasReady}}">＋ 选图</button>
     <view class="export-group">
       <picker class="toolbar-format" range="{{formats}}" value="{{formatIndex}}" bindchange="changeFormat" disabled="{{busy}}"><view class="format">{{formats[formatIndex]}} ▾</view></picker>
-      <button class="primary toolbar-button toolbar-save" size="mini" bindtap="exportPhoto" disabled="{{!ready || busy}}" loading="{{busy && !captionChecking && !presetChecking}}">保存图片</button>
+      <button class="primary toolbar-button toolbar-save" size="mini" bindtap="exportPhoto" disabled="{{!ready || busy || cropping}}" loading="{{busy && !captionChecking && !presetChecking}}">保存图片</button>
     </view>
   </view>
   <view class="stage" style="height:{{stageHeight}}px">
@@ -11,17 +11,22 @@
     <canvas type="2d" id="preview" class="preview {{ready ? '' : 'canvas-idle'}}" bindtouchstart="viewStart" catchtouchmove="viewMove" bindtouchend="viewEnd" bindtouchcancel="viewCancel"></canvas>
     <view class="empty" wx:if="{{!ready}}"><view class="empty-title">从一张照片开始</view><text>选择相册图片或拍一张照片</text><button class="primary" bindtap="choosePhoto" disabled="{{busy || !canvasReady}}">选择图片</button></view>
     </view>
-    <view class="stage-footer">
+    <view class="stage-footer" wx:if="{{!cropping}}">
       <view class="view-actions">
         <button class="compare-button {{comparing?'comparing':''}}" bindtouchstart="compareStart" bindtouchend="compareEnd" bindtouchcancel="compareEnd" disabled="{{!ready || busy}}">查看原图</button>
       </view>
       <view class="image-actions"><button bindtap="undo" disabled="{{!ready || !canUndo || busy}}">↶ 返回上一步</button><button bindtap="reset" disabled="{{!ready || busy}}">重置全部</button></view>
     </view>
+    <view wx:if="{{cropping}}" class="crop-hint">拖动四角裁剪 · 双指缩放 · 单指移动</view>
   </view>
   <view class="dock">
-    <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab"><text>{{item.label}}</text><view wx:if="{{item.key==='frame'}}" class="frame-tab-switch {{frame.enabled?'on':''}} {{!ready || busy?'disabled':''}}" catchtap="toggleFrameTab"><view class="frame-tab-knob"></view></view></button></view>
+    <view class="tabs"><button wx:for="{{tabs}}" wx:key="key" class="{{tab===item.key?'active':''}}" data-key="{{item.key}}" bindtap="switchTab" disabled="{{item.key==='crop' && (!ready || busy)}}"><text>{{item.label}}</text><view wx:if="{{item.key==='frame'}}" class="frame-tab-switch {{frame.enabled?'on':''}} {{!ready || busy?'disabled':''}}" catchtap="toggleFrameTab"><view class="frame-tab-knob"></view></view></button></view>
     <scroll-view class="panel" scroll-y enhanced show-scrollbar="{{false}}">
-      <view class="panel-inner {{tab==='frame'?'frame-panel':'adjust-panel'}}" wx:if="{{tab==='adjust' || tab==='frame'}}">
+      <view wx:if="{{tab==='crop'}}" class="panel-inner crop-panel">
+        <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="crop-ratios"><view class="crop-ratio-strip"><button wx:for="{{cropRatios}}" wx:key="key" class="crop-ratio {{cropRatio===item.key?'is-selected':''}}" data-key="{{item.key}}" bindtap="cropRatioChange"><view class="ratio-symbol ratio-{{item.key}}"></view><text>{{item.label}}</text></button></view></scroll-view>
+        <view class="crop-actions"><view class="crop-tools"><button bindtap="cropRotate">↻ 旋转</button><button bindtap="cropReset">重置</button></view><view class="crop-confirm-actions"><button class="crop-cancel" bindtap="cancelCrop">取消</button><button class="primary crop-done" bindtap="applyCrop">确认裁剪</button></view></view>
+      </view>
+      <view class="panel-inner {{tab==='frame'?'frame-panel':'adjust-panel'}}" wx:elif="{{tab==='adjust' || tab==='frame'}}">
         <scroll-view wx:if="{{tab==='adjust'}}" class="parameter-list color-list" scroll-x enhanced show-scrollbar="{{false}}"><view class="parameter-row color-parameters"><button wx:for="{{adjustList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{selected===item.key?'chosen':''}}"><text class="parameter-icon">{{item.icon}}</text><text>{{item.label}}</text></button></view></scroll-view>
         <view wx:else class="parameter-list frame-list"><view class="parameter-row frame-parameters"><button wx:for="{{frameList}}" wx:key="key" data-key="{{item.key}}" bindtap="selectParameter" class="{{frameSelected===item.key?'chosen':''}}"><text>{{item.label}}</text></button></view></view>
         <view class="slider-row">

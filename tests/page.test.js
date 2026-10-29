@@ -5,7 +5,7 @@ function page(){const p={...definition,data:JSON.parse(JSON.stringify(definition
 test('vertical scroll does not edit; horizontal drag commits once',()=>{const p=page();p.source={};p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:12,clientY:40}]});p.sliderEnd();assert.equal(p.values.exposure,0);assert.equal(p.history.items.length,1);p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:60,clientY:11}]});assert(p.values.exposure>0);assert.equal(p.history.items.length,1);p.sliderEnd();assert.equal(p.history.items.length,2);p.undo();assert.equal(p.values.exposure,0);});
 test('cancelled frame gesture restores original value',()=>{const p=page();p.source={};p.data.tab='frame';p.sliderStart({touches:[{clientX:10,clientY:10}]});p.sliderMove({touches:[{clientX:90,clientY:11}]});assert.notEqual(p.frame.size,83);p.sliderCancel();assert.equal(p.frame.size,83);assert.equal(p.history.items.length,1);});
 test('hold comparison preserves frame, releases on end/cancel and on page hide',()=>{const p=page();p.source={};let renders=0;p.render=()=>renders++;p.frame.caption='山间';p.values.contrast=20;const before=p.state();p.compareStart();assert.equal(p.data.comparing,true);assert.deepEqual(p.state(),before);p.compareEnd();assert.equal(p.data.comparing,false);assert.equal(renders,2);p.compareEnd();assert.equal(renders,2);p.compareStart();p.onHide();assert.equal(p.data.comparing,false);assert.deepEqual(p.state(),before);assert.equal(p.history.items.length,1);p.data.busy=true;p.compareStart();assert.equal(p.data.comparing,false);p.data.busy=false;p.source=null;p.compareStart();assert.equal(p.data.comparing,false);});
-test('recommended presets restore default frame and matching caption, with undo',()=>{for(const [key,label] of [['clear','清透'],['night','冷调'],['warm','暖色'],['film','胶片'],['mono','黑白']]){const p=page();p.source={};p.frame={...config.frameDefaults,enabled:false,caption:'旅行',radius:6};p.commit('自定义画框');p.applyPreset({currentTarget:{dataset:{key}}});assert.deepEqual(p.frame,{...config.frameDefaults,caption:'微光快调 - '+label});assert.deepEqual(p.values,{...config.defaults(),...config.presets[key]});p.undo();assert.equal(p.frame.radius,6);assert.equal(p.frame.caption,'旅行');assert.equal(p.frame.enabled,false);p.redo();p.reset();p.undo();assert.equal(p.frame.caption,'微光快调 - '+label);}});
+test('recommended presets restore default frame and matching caption, with undo',()=>{for(const [key,label] of [['clear','清透'],['night','冷调'],['autumnSun','秋日暖阳'],['autumnFilm','秋野胶片'],['warm','暖色'],['film','胶片'],['mono','黑白']]){const p=page();p.source={};p.frame={...config.frameDefaults,enabled:false,caption:'旅行',radius:6};p.commit('自定义画框');p.applyPreset({currentTarget:{dataset:{key}}});assert.deepEqual(p.frame,{...config.frameDefaults,caption:'微光快调 - '+label});assert.deepEqual(p.values,{...config.defaults(),...config.presets[key]});p.undo();assert.equal(p.frame.radius,6);assert.equal(p.frame.caption,'旅行');assert.equal(p.frame.enabled,false);p.redo();p.reset();p.undo();assert.equal(p.frame.caption,'微光快调 - '+label);}});
 test('declining album permission previews result',async()=>{const p=page(),calls=[];global.wx={saveImageToPhotosAlbum(o){calls.push('save');o.fail({});},getSetting(o){o.success({authSetting:{'scope.writePhotosAlbum':false}});},showModal(o){o.success({confirm:false});},previewImage(o){calls.push(o.urls[0]);}};await p.saveToAlbum('/tmp/result.png');assert.deepEqual(calls,['save','/tmp/result.png']);});
 test('approved settings flow retries save',async()=>{const p=page();let count=0;global.wx={saveImageToPhotosAlbum(o){if(++count===1)o.fail({});else o.success({});},getSetting(o){o.success({authSetting:{'scope.writePhotosAlbum':false}});},showModal(o){o.success({confirm:true});},openSetting(o){o.success({authSetting:{'scope.writePhotosAlbum':true}});},showToast(){}};await p.saveToAlbum('/tmp/result.png');assert.equal(count,2);});
 test('privacy callback agrees explicitly',()=>{const p=page();let event;p._privacyResolve=e=>event=e;p.agreePrivacy();assert.equal(event.buttonId,'privacyAgree');assert.equal(event.event,'agree');assert.equal(p.data.privacyVisible,false);});
@@ -336,4 +336,23 @@ test('unavailable GPU falls back once without lowering interactive image resolut
  const warn=console.warn;console.warn=()=>{};
  try{p.render();p.values.exposure=.5;p.render();assert.equal(attempts,1);assert.equal(writes,2);assert.equal(p.photo.width,1200);assert.equal(p.previewSource(),p.source);}
  finally{console.warn=warn;delete global.wx.createOffscreenCanvas;}
+});
+
+test('crop apply records one step, undo restores original and redo restores crop',()=>{
+ const p=page();p.source={};p.image={width:4000,height:3000};p.cropDraft={rotation:0};p.cropBox={x:25,y:0,w:50,h:100};p.cropView={x:0,y:0,scale:1};p._cropPhoto={width:100,height:100};p._cropReturn='presets';p.data.cropping=true;
+ let rebuilds=0;p.rebuildCrop=()=>rebuilds++;p.fitView=()=>{};
+ p.applyCrop();assert.deepEqual(p.crop,{x:.25,y:0,w:.5,h:1,rotation:0});assert.equal(p.history.items.length,2);assert.equal(p.data.cropping,false);
+ p.undo();assert.equal(p.crop,null);p.redo();assert.equal(p.crop.w,.5);assert.equal(rebuilds,3);
+});
+test('cancel crop and switch tabs discard draft without changing saved state',()=>{
+ const p=page();p.crop={x:.2,y:0,w:.8,h:1,rotation:0};p.cropDraft={rotation:1};p.data.cropping=true;p.data.tab='crop';p._cropReturn='presets';p.render=()=>{};
+ p.switchTab({currentTarget:{dataset:{key:'adjust'}}});assert.equal(p.data.cropping,false);assert.equal(p.data.tab,'adjust');assert.equal(p.crop.rotation,0);assert.equal(p.history.items.length,1);
+});
+
+test('step selection updates the next-step button and restores later adjustments',()=>{
+ const p=page();p.source={};
+ for(const value of [.2,.4,.6]){p.values.exposure=value;p.commit('曝光');}
+ p.gotoStep({currentTarget:{dataset:{index:1}}});assert.equal(p.data.canRedo,true);assert.equal(p.values.exposure,.2);
+ p.redo();assert.equal(p.values.exposure,.4);assert.equal(p.data.canRedo,true);
+ p.redo();assert.equal(p.values.exposure,.6);assert.equal(p.data.canRedo,false);
 });
