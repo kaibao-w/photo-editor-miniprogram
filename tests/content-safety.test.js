@@ -188,3 +188,17 @@ test('cloud timing covers upload, submission and callback without private payloa
  for(const stage of ['upload','api_submission','submission_total','callback_latency','callback_discovery'])assert(timings.some(row=>row.stage===stage&&row.ms>=0));
  const serialized=JSON.stringify(logs);for(const secret of [image.base64,env.WECHAT_CALLBACK_TOKEN,env.WECHAT_CALLBACK_AES_KEY,'https://temporary.example'])assert(!serialized.includes(secret));
 });
+
+
+test('detection JPEG uses reduced quality and reports only dimensions and byte count',async()=>{
+ const logs=[];const original=console.info;let options,removed;
+ console.info=(...args)=>logs.push(args);
+ global.wx={canvasToTempFilePath:o=>{options=o;o.success({tempFilePath:'/detection.jpg'});},getFileSystemManager:()=>({readFile:o=>o.success({data:image.base64}),unlink:o=>{removed=o.filePath;}})};
+ try{
+  assert.equal(await safety.prepareImage({width:512,height:384}),image.base64);
+  assert.equal(options.fileType,'jpg');assert.equal(options.quality,.7);
+  assert.equal(options.destWidth,512);assert.equal(options.destHeight,384);
+  assert.equal(removed,'/detection.jpg');
+  assert.deepEqual(logs.find(row=>row[0]==='contentSafety: detection_image')[1],{width:512,height:384,bytes:4,quality:.7});
+ }finally{console.info=original;}
+});

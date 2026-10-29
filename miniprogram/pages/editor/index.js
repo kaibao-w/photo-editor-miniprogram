@@ -1,3 +1,4 @@
+const {GPUPreview}=require('../../utils/gpu-preview');
 const loading=require('../../utils/loading');
 const contentSafety=require('../../utils/content-safety');
 const savedPresets=require('../../utils/presets');
@@ -18,11 +19,13 @@ const editor = {
     selected: 'exposure', frameSelected: 'size', values: config.defaults(), frame: {...config.frameDefaults},
     formats: ['JPG', 'PNG'], formatIndex: 0,
     presets: [{key:'clear',label:'清透'},{key:'night',label:'冷调'},{key:'warm',label:'暖色'},{key:'film',label:'胶片'},{key:'mono',label:'黑白'}], preset: '',
+    sliderMin:-200,sliderMax:200,sliderStep:5,sliderValue:0,
     label: '曝光', parameterValue: 0, percent: 50, comparing: false, zoomLabel: '100%',
     history: [], current: 0, canUndo: false, canRedo: false, marked: false, privacyVisible: false
   },
   onLoad() {
     this.values = config.defaults(); this.frame = {...config.frameDefaults}; this.view = {zoom:1,x:0,y:0};
+    this._dragLimit=1200; // Keep the same preview resolution throughout a gesture.
     this._alive = true; this._privacyHandler = resolve => { this._privacyResolve = resolve; this.setData({privacyVisible:true}); };
     if (wx.onNeedPrivacyAuthorization) wx.onNeedPrivacyAuthorization(this._privacyHandler);
   },
@@ -46,12 +49,14 @@ const editor = {
   onReady() { this.initialize().catch(error => this.error(error, '画布初始化失败，请升级微信后重试')); },
   onUnload() {
     this._alive = false; clearTimeout(this._timer);
+    if(this._gpu)this._gpu.dispose();this._gpu=null;
     if(wx.offNeedPrivacyAuthorization) wx.offNeedPrivacyAuthorization(this._privacyHandler);
     if(this._privacyResolve) this._privacyResolve({event:'disagree'});
-    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite]) if(canvas) {canvas.width=1;canvas.height=1;}
+    for(const canvas of [this.canvas, this.exportCanvas, this.safetyCanvas, this.photo, this.composite, this._frameCache&&this._frameCache.canvas, this._gpuBackground]) if(canvas) {canvas.width=1;canvas.height=1;}
+    this._frameCache=this._gradedSource=null;
     this.source = this.image = this._photoCheck = this._dragSource = this._dragSourceOwner = this._previewPixels = null;
   },
-  onHide(){this.compareEnd();},
+  onHide(){if(this.slider)this.sliderCancel();this.compareEnd();},
   onResize() { if(this.canvas) this.measure(); },
   createCanvas(width, height) { return wx.createOffscreenCanvas({type:'2d',width,height}); },
   async initialize() {
@@ -89,7 +94,7 @@ const editor = {
     await this.checkText(row.frame && row.frame.caption,{foreground:false});
   },
   async prepareDetection(image,width,height){
-    const scale=Math.min(1,750/width,750/height);
+    const scale=Math.min(1,512/width,512/height);
     // wx.canvasToTempFilePath requires a page Canvas component, not OffscreenCanvas.
     const canvas=this.safetyCanvas;
     if(!canvas){console.warn('contentSafety: safety_canvas_missing');throw contentSafety.failure('unavailable');}
@@ -144,6 +149,7 @@ const editor = {
     const selectedPreset=this.data.savedPresets.find(r=>r.id===this.data.selectedPresetId);
     const matches=selectedPreset && Object.keys(selectedPreset.values).every(k=>selectedPreset.values[k]===this.values[k]) && (!selectedPreset.frame || Object.keys(selectedPreset.frame).every(k=>selectedPreset.frame[k]===this.frame[k]));
     this.setData({selectedPresetId:matches?selectedPreset.id:'',values:{...this.values},frame:{...this.frame}, label:def.label, parameterValue:value,
+      sliderMin:Math.round(def.min*100),sliderMax:Math.round(def.max*100),sliderStep:Math.round(def.step*100),sliderValue:Math.round(value*100),
       percent:(value-def.min)/(def.max-def.min)*100, preset:matches?'':Object.keys(config.presets).find(k=>JSON.stringify({...config.defaults(),...config.presets[k]})===JSON.stringify(this.values)) || ''});
   },
   syncHistory() {
@@ -224,12 +230,22 @@ const editor = {
   schedule() {
     // Coalesce updates without postponing the pending preview during continuous dragging.
     if(this._timer != null || !this._alive)return;
-    this._timer=setTimeout(()=>{this._timer=null;if(this._alive){if(this._sliderSync){this._sliderSync=false;this.sync();}this.render();}},16);
+    this._timer=setTimeout(()=>{this._timer=null;if(this._alive){if(this._sliderSync){this._sliderSync=false;if(this.slider&&this.slider.native){const g=this.slider;this.setData({parameterValue:(g.frame?this.frame:this.values)[g.key]});}else this.sync();}const started=Date.now();this.render();this._renderMs=Date.now()-started;}},this.slider&&this.slider.native?Math.max(8,(this._gpu?16:33)-(this._renderMs||0)):16);
   },
   previewSource() {
-    if(!this.slider || this.slider.axis!=='horizontal' || Math.max(this.source.width,this.source.height)<=600)return this.source;
+    const limit=this._dragLimit||600;
+    if(!this.slider || this.slider.axis!=='horizontal' || Math.max(this.source.width,this.source.height)<=limit)return this.source;
     if(this._dragSourceOwner===this.source)return this._dragSource;
-    const source=this.source,scale=600/Math.max(source.width,source.height);
+    const source=this.source,scale=limit/Math.max(source.width,source.height);
+    // Resize the decoded original directly instead of copying a full preview buffer on first drag.
+    if(this.image){
+      const small=this.createCanvas(Math.max(1,Math.round(source.width*scale)),Math.max(1,Math.round(source.height*scale)));
+      try{
+        const c=small.getContext('2d');c.drawImage(this.image,0,0,small.width,small.height);
+        this._dragSource=c.getImageData(0,0,small.width,small.height);this._dragSourceOwner=source;
+        return this._dragSource;
+      }finally{small.width=small.height=1;}
+    }
     const full=this.createCanvas(source.width,source.height),small=this.createCanvas(Math.max(1,Math.round(source.width*scale)),Math.max(1,Math.round(source.height*scale)));
     try {
       const c=full.getContext('2d'),pixels=c.createImageData(source.width,source.height);pixels.data.set(source.data);c.putImageData(pixels,0,0);
@@ -241,14 +257,36 @@ const editor = {
   render() {
     if(!this.source || !this._alive) return;
     try {
+      if(!this._gpuDisabled&&typeof wx.createOffscreenCanvas==='function'){
+        try{
+          if(!this._gpu)this._gpu=new GPUPreview(options=>wx.createOffscreenCanvas(options));
+          const {width:w,height:h}=this.source;
+          for(const canvas of [this.photo,this.composite]){if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}
+          if(!this._gpuBackground)this._gpuBackground=this.createCanvas(1,1);
+          this._gpu.render(this.source,this.values,this.data.comparing,this.photo.getContext('2d'),this.frame.enabled?this._gpuBackground.getContext('2d'):null,this.frame.blur);
+          const output=this.composite.getContext('2d');
+          if(this.frame.enabled)composeFrame(this.photo,output,this.frame,(w,h)=>this.createCanvas(w,h),320,{background:this._gpuBackground});
+          else{output.clearRect(0,0,w,h);output.drawImage(this.photo,0,0);}
+          this.drawView();return;
+        }catch(error){
+          console.warn('GPU preview unavailable; using compatible renderer',{message:error.message});
+          if(this._gpu)this._gpu.dispose();this._gpu=null;this._gpuDisabled=true;this._gradedSource=null;
+        }
+      }
       const source=this.previewSource(),{width:w,height:h}=source;
       for(const canvas of [this.photo,this.composite]){if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;}
       const c=this.photo.getContext('2d');
       if(!this._previewPixels || this._previewPixels.width!==w || this._previewPixels.height!==h)this._previewPixels=c.createImageData(w,h);
-      const pixels=this._previewPixels;pixels.data.set(source.data);
-      if(!this.data.comparing)grade(pixels,this.values);c.putImageData(pixels,0,0);
+      const pixels=this._previewPixels,gradeKey=JSON.stringify([this.data.comparing,this.values]);
+      if(this._gradedSource!==source||this._gradeKey!==gradeKey){
+        pixels.data.set(source.data);
+        if(!this.data.comparing)grade(pixels,this.values);c.putImageData(pixels,0,0);
+        this._gradedSource=source;this._gradeKey=gradeKey;this._photoRevision=(this._photoRevision||0)+1;
+      }
       const output=this.composite.getContext('2d');
-      if(this.frame.enabled)composeFrame(this.photo,output,this.frame,(w,h)=>this.createCanvas(w,h),this.slider&&this.slider.axis==='horizontal'?160:320);else {output.clearRect(0,0,w,h);output.drawImage(this.photo,0,0);}
+      const dragging=this.slider&&this.slider.axis==='horizontal';
+      this._frameCache=this._frameCache||{};
+      if(this.frame.enabled)composeFrame(this.photo,output,this.frame,(w,h)=>this.createCanvas(w,h),dragging?(this.slider.native?96:160):320,{cache:this._frameCache,revision:this._photoRevision,pixels:dragging?pixels:null});else {output.clearRect(0,0,w,h);output.drawImage(this.photo,0,0);}
       this.drawView();
     } catch(error) {this.error(error,'预览失败，请尝试较小的图片');}
   },
@@ -262,7 +300,7 @@ const editor = {
   fitView() {if(!this.source)return;this.view={zoom:Math.min(1,this.rect.height/(this.rect.width*this.source.height/this.source.width)),x:0,y:0};this.drawView();},
   compareStart(){if(!this.source || this.data.busy || this.data.comparing)return;this.setData({comparing:true});this.render();},
   compareEnd(){if(!this.data.comparing)return;this.setData({comparing:false});if(this._alive)this.render();},
-  switchTab(e){this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
+  switchTab(e){if(this.slider)this.sliderCancel();this.setData({tab:e.currentTarget.dataset.key},()=>this.sync());},
   selectParameter(e){const key=e.currentTarget.dataset.key;this.setData(this.data.tab==='frame'?{frameSelected:key}:{selected:key});this.sync();},
   reset(){if(!this.source || this.data.busy)return;this.values=config.defaults();this.frame={...config.frameDefaults,enabled:false};this.edit('重置全部');},
   applyPreset(e){if(!this.source || this.data.busy)return;const key=e.currentTarget.dataset.key,preset=this.data.presets.find(p=>p.key===key);if(!preset)return;this.setData({selectedPresetId:''});this.values={...config.defaults(),...config.presets[key]};this.frame={...config.frameDefaults,caption:'微光快调 - '+preset.label};this.edit('预设 · '+preset.label);},
@@ -280,6 +318,30 @@ const editor = {
       finally{this._captionPromise=null;if(this._alive)this.setData({busy:false,captionChecking:false});}
     })();
     return this._captionPromise;
+  },
+  nativeSliderChanging(e){
+    if(!this.source || this.data.busy)return;
+    if(!this.slider){
+      const frame=this.data.tab==='frame',key=frame?this.data.frameSelected:this.data.selected;
+      const def=(frame?this.data.frameList:this.data.adjustList).find(d=>d.key===key);
+      this.slider={native:true,frame,key,def,start:(frame?this.frame:this.values)[key],axis:'horizontal'};
+    }
+    const g=this.slider,{min,max,step}=g.def,raw=Number(e.detail.value)/100;
+    if(!Number.isFinite(raw))return;
+    const value=Number(Math.max(min,Math.min(max,min+Math.round((raw-min)/step)*step)).toFixed(4));
+    (g.frame?this.frame:this.values)[g.key]=value;
+    if(this.data.comparing)this.setData({comparing:false});
+    // The built-in slider owns thumb movement; only the number crosses the bridge.
+    this._sliderSync=true;this.schedule();
+  },
+  nativeSliderChange(e){
+    this.nativeSliderChanging(e);
+    const g=this.slider;if(!g||!g.native)return;
+    this.slider=null;this._sliderSync=false;
+    clearTimeout(this._timer);this._timer=null;
+    this.sync();
+    if((g.frame?this.frame:this.values)[g.key]!==g.start)this.commit(g.def.label+'调整');
+    this.schedule();
   },
   sliderStart(e){
     if(!this.source || this.data.busy)return;

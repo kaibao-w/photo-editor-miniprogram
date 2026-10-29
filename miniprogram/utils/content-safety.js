@@ -55,9 +55,11 @@ function remember(key,record){
 async function prepareImage(canvas){
   let path,stage='canvas_export';const started=Date.now();
   try{
-    const result=await call('canvasToTempFilePath',{canvas,fileType:'jpg',quality:.8,destWidth:canvas.width,destHeight:canvas.height});
+    const result=await call('canvasToTempFilePath',{canvas,fileType:'jpg',quality:.7,destWidth:canvas.width,destHeight:canvas.height});
     path=result.tempFilePath;stage='read_detection_file';
     const file=await new Promise((resolve,reject)=>wx.getFileSystemManager().readFile({filePath:path,encoding:'base64',success:resolve,fail:reject}));
+    const padding=file.data.endsWith('==')?2:file.data.endsWith('=')?1:0;
+    console.info('contentSafety: detection_image',{width:canvas.width,height:canvas.height,bytes:Math.floor(file.data.length*3/4)-padding,quality:.7});
     return file.data;
   }catch(error){
     console.warn('contentSafety: image preparation failed',{stage,code:error.errCode||error.errno||'unknown'});

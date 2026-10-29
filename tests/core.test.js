@@ -10,3 +10,26 @@ test('history preserves snapshots, alternate branches and marks',()=>{const s=st
 test('anchored zoom and movement bounds',()=>{assert.deepEqual(zoomAt({zoom:1,x:0,y:0},2,50,20),{zoom:2,x:-50,y:-20});assert.deepEqual(bounds({zoom:2,x:900,y:-900},400,300,.75),{zoom:2,x:200,y:-150});});
 test('export dimensions are bounded and never upscale',()=>{assert.deepEqual(exportSize(800,600,true),{width:800,height:600,reduced:false});for(const original of [true,false]){const s=exportSize(5712,4284,original);assert(s.width*s.height<=12001000);assert(Math.max(s.width,s.height)<=(original?4096:2048));assert(s.reduced);assert(Math.abs(s.width/s.height-4/3)<.001);}});
 test('frame defaults and parameter order',()=>{assert.equal(config.frameDefaults.enabled,true);assert.deepEqual(config.frames.map(d=>d[0]),['size','radius','shadow','blur','darkness']);const g=frameGeometry(1000,1500,config.frameDefaults);assert.equal(g.w,830);assert.equal(g.x,85);assert(g.y+g.h<1500);});
+
+test('interactive frame composition reuses its canvas and never reads pixels back',()=>{
+ const {composeFrame}=require('../miniprogram/utils/image');
+ let allocations=0,reads=0,writes=0;
+ const context=canvas=>({canvas,clearRect(){},fillRect(){},drawImage(){},save(){},restore(){},beginPath(){},moveTo(){},arcTo(){},closePath(){},fill(){},clip(){},fillText(){},
+  createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),
+  getImageData(x,y,w,h){reads++;return this.createImageData(w,h);},putImageData(){writes++;}});
+ const create=(width,height)=>{allocations++;const canvas={width,height};const c=context(canvas);canvas.getContext=()=>c;return canvas;};
+ const photo={width:12,height:8},out=context({width:12,height:8}),cache={};
+ const pixels={width:12,height:8,data:new Uint8ClampedArray(12*8*4).fill(100)};
+ const f={...config.frameDefaults},options={cache,pixels,revision:1};
+ composeFrame(photo,out,f,create,6,options);assert.equal(reads,0);assert.equal(writes,1);assert.equal(allocations,1);
+ // Frame geometry and darkness do not change the already graded, blurred background.
+ composeFrame(photo,out,{...f,size:70,darkness:40},create,6,options);
+ assert.equal(writes,1);assert.equal(allocations,1);
+ composeFrame(photo,out,{...f,blur:60},create,6,options);assert.equal(writes,2);
+ composeFrame(photo,out,f,create,6,{...options,revision:2});assert.equal(writes,3);assert.equal(reads,0);
+ // Releasing the gesture restores the normal, high-quality Canvas downsampling path.
+ composeFrame(photo,out,f,create,320,{cache,revision:2});assert.equal(reads,1);
+ // Export does not use the interactive cache and releases its temporary canvas.
+ let exported;composeFrame(photo,out,f,(w,h)=>(exported=create(w,h)),320);
+ assert.equal(exported.width,0);assert.equal(reads,2);
+});

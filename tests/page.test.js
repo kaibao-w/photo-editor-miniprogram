@@ -152,7 +152,7 @@ test('image moderation exports the dedicated page canvas and preserves the full-
  p.safetyCanvas={getContext:()=>ctx};p.exportCanvas={width:4000,height:3000};
  p.createCanvas=()=>assert.fail('offscreen canvas must not be used for detection export');
  const api=require('../miniprogram/utils/content-safety'),prepare=api.prepareImage,check=api.checkPreparedImage;
- api.checkPreparedImage=async()=>{};api.prepareImage=async canvas=>{assert.equal(canvas,p.safetyCanvas);assert.equal(canvas.width,750);assert.equal(canvas.height,563);};
+ api.checkPreparedImage=async()=>{};api.prepareImage=async canvas=>{assert.equal(canvas,p.safetyCanvas);assert.equal(canvas.width,512);assert.equal(canvas.height,384);};
  global.wx={showLoading(){},hideLoading(){}};
  try{await p.checkImage(p.exportCanvas,4000,3000);assert.equal(draws[0][0],p.exportCanvas);assert.equal(p.exportCanvas.width,4000);assert.equal(p.exportCanvas.height,3000);assert.equal(p.safetyCanvas.width,1);}
  finally{api.prepareImage=prepare;api.checkPreparedImage=check;}
@@ -271,4 +271,69 @@ test('drag bursts coalesce UI updates and release renders full quality with fina
  assert.equal(syncs,0);t.mock.timers.tick(16);assert.equal(syncs,1);assert.equal(renders.length,1);assert.equal(renders[0].dragging,true);
  const value=p.values.exposure;p.sliderEnd();t.mock.timers.tick(16);
  assert.deepEqual(renders.at(-1),{dragging:false,value});assert.equal(p.data.parameterValue,value);assert.equal(p.history.items.length,2);
+});
+
+
+test('native dragging coalesces previews without feeding thumb positions back to the view',t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const p=page(),updates=[],renders=[];p.source={};p.schedule=definition.schedule;
+ p.setData=function(data){updates.push(data);Object.assign(this.data,data);};
+ p.render=()=>renders.push({dragging:!!p.slider,value:p.values.exposure});
+ for(const value of [5,10,25,35])p.nativeSliderChanging({detail:{value}});
+ assert.equal(updates.length,0);assert.equal(p.history.items.length,1);
+ t.mock.timers.tick(33);
+ assert.deepEqual(updates,[{parameterValue:.35}]);assert.equal(renders.length,1);
+ p.nativeSliderChange({detail:{value:45}});t.mock.timers.tick(16);
+ assert.deepEqual(renders.at(-1),{dragging:false,value:.45});
+ assert.equal(p.data.sliderValue,45);assert.equal(p.history.items.length,2);
+ p.undo();assert.equal(p.values.exposure,0);
+});
+test('native frame slider preserves fractional steps and cancellation restores the starting value',()=>{
+ const p=page();p.source={};p.data.tab='frame';p.data.frameSelected='radius';p.sync();
+ assert.equal(p.data.sliderStep,50);
+ p.nativeSliderChanging({detail:{value:450}});assert.equal(p.frame.radius,4.5);
+ p.sliderCancel();assert.equal(p.frame.radius,3);assert.equal(p.data.sliderValue,300);assert.equal(p.history.items.length,1);
+ p.nativeSliderChange({detail:{value:550}});assert.equal(p.frame.radius,5.5);assert.equal(p.history.items.length,2);
+});
+test('native slider ignores disabled edits and does not record unchanged values',()=>{
+ const p=page();p.source={};p.data.busy=true;p.nativeSliderChange({detail:{value:100}});
+ assert.equal(p.values.exposure,0);p.data.busy=false;p.nativeSliderChange({detail:{value:0}});
+ assert.equal(p.history.items.length,1);
+});
+test('iOS drag preview resizes original once at 360px then restores full preview after release',()=>{
+ const p=page();p._dragLimit=360;p.source={width:1200,height:800};p.image={};p.slider={native:true,axis:'horizontal'};
+ let allocations=0;
+ p.createCanvas=(width,height)=>{allocations++;return {width,height,getContext(){return {drawImage:image=>assert.equal(image,p.image),getImageData:(x,y,w,h)=>({width:w,height:h})};}};};
+ const reduced=p.previewSource();assert.deepEqual(reduced,{width:360,height:240});
+ assert.equal(p.previewSource(),reduced);assert.equal(allocations,1);
+ p.slider=null;assert.equal(p.previewSource(),p.source);
+});
+
+test('frame-only preview changes skip pixel grading while color changes and release refresh pixels',()=>{
+ const p=page();let writes=0;
+ const ctx=canvas=>({canvas,clearRect(){},fillRect(){},drawImage(){},save(){},restore(){},beginPath(){},moveTo(){},arcTo(){},closePath(){},fill(){},clip(){},fillText(){},
+  createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),
+  getImageData(x,y,w,h){return this.createImageData(w,h);},putImageData(){if(canvas===p.photo)writes++;}});
+ p.createCanvas=(width,height)=>{const canvas={width,height};const c=ctx(canvas);canvas.getContext=()=>c;return canvas;};
+ p.photo=p.createCanvas(2,2);p.composite=p.createCanvas(2,2);p.drawView=()=>{};
+ p.source={width:2,height:2,data:new Uint8ClampedArray(16).fill(100)};
+ p.slider={native:true,axis:'horizontal'};
+ p.render();assert.equal(writes,1);
+ p.frame.size=70;p.render();assert.equal(writes,1);
+ p.values.exposure=.5;p.render();assert.equal(writes,2);
+ const small=p.source;p.previewSource=()=>p.slider?small:{width:4,height:4,data:new Uint8ClampedArray(64).fill(100)};
+ p.slider=null;p.render();assert.equal(writes,3);assert.equal(p.photo.width,4);
+});
+
+test('unavailable GPU falls back once without lowering interactive image resolution',()=>{
+ const p=page();p._dragLimit=1200;p.frame.enabled=false;p.slider={native:true,axis:'horizontal'};
+ p.source={width:1200,height:1,data:new Uint8ClampedArray(4800).fill(120)};
+ let attempts=0,writes=0;
+ global.wx={createOffscreenCanvas(){attempts++;throw new Error('unsupported');}};
+ p.photo={width:1200,height:1,getContext:()=>({createImageData:(width,height)=>({width,height,data:new Uint8ClampedArray(width*height*4)}),putImageData(){writes++;}})};
+ p.composite={width:1200,height:1,getContext:()=>({clearRect(){},drawImage(){}})};
+ p.drawView=()=>{};p.error=()=>assert.fail('GPU capability error should not reach the user');
+ const warn=console.warn;console.warn=()=>{};
+ try{p.render();p.values.exposure=.5;p.render();assert.equal(attempts,1);assert.equal(writes,2);assert.equal(p.photo.width,1200);assert.equal(p.previewSource(),p.source);}
+ finally{console.warn=warn;delete global.wx.createOffscreenCanvas;}
 });
