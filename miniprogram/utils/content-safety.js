@@ -2,7 +2,7 @@ const loading=require('./loading');
 const ENV = 'cloud1-d9gnhap66f1142761';
 const CONSENT = 'contentSafetyConsent.v2';
 const call = (name,args={}) => new Promise((resolve,reject)=>wx[name]({...args,success:resolve,fail:reject}));
-function failure(status) {const error=new Error('Content safety');error.safety=status;return error;}
+function failure(status,transport=false) {const error=new Error('Content safety');error.safety=status;error.transport=transport;return error;}
 async function consent() {
   if(wx.getStorageSync(CONSENT)===true)return;
   const answer=await call('showModal',{title:'内容安全检测',content:'为保障内容安全，将把检测用图片及你输入的文字发送至微信内容安全服务。检测副本将临时存储，检测完成或过期后自动清理。是否同意？',confirmText:'同意',cancelText:'暂不使用'});
@@ -16,7 +16,7 @@ async function request(data,allowPending=false) {
     if(!wx.cloud)throw failure('unavailable');
     const response=await Promise.race([
       wx.cloud.callFunction({name:'contentSafety',config:{env:ENV},data}),
-      new Promise((_,reject)=>{timer=setTimeout(()=>reject(failure('unavailable')),25000);})
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(failure('unavailable',true)),25000);})
     ]);
     const status=response && response.result && response.result.status;
     if(allowPending&&status==='pending')return response.result;
@@ -28,7 +28,7 @@ async function request(data,allowPending=false) {
   }catch(error){
     if(error.safety)throw error;
     console.warn('contentSafety: request failed',{stage:data.kind,code:error.errCode||error.errno||'unknown'});
-    throw failure('unavailable');
+    throw failure('unavailable',true);
   }finally{clearTimeout(timer);if(data.kind!=='poll')timing('request_'+data.kind,started);}
 }
 async function detecting(action){
@@ -108,7 +108,7 @@ async function checkPreparedImage(base64,{foreground=true,scope='',isCurrent=()=
   }catch(error){
     if(error.safety==='blocked')record.status='blocked';
     // Keep pending tasks for retries, but never cache a service failure as approval.
-    if(error.safety!=='pending'&&error.safety!=='cancel'&&error.safety!=='blocked'&&imageChecks.get(key)===record)imageChecks.delete(key);
+    if(error.safety!=='pending'&&error.safety!=='cancel'&&error.safety!=='blocked'&&!(record.id&&error.transport)&&imageChecks.get(key)===record)imageChecks.delete(key);
     throw error;
   }finally{finish();timing('image_check_total',started,{polls});}
 }

@@ -24,4 +24,14 @@ function resize(box,corner,dx,dy,ratio,bounds){
  if(ratio){w=Math.min(Math.max(40,w),maxW,maxH*ratio);h=w/ratio;}
  return {x:right?ax:ax-w,y:bottom?ay:ay-h,w,h};
 }
-module.exports={full,dimensions,drawCrop,constrain,normalized,resize};
+// Rotate the selection with the image so the same subject remains selected.
+function rotateSelection(c){return {x:Math.max(0,1-c.y-c.h),y:c.x,w:c.h,h:c.w,rotation:(c.rotation+1)%4};}
+function ratioBox(anchor,ratio,bounds){
+ if(!ratio)return {...anchor};
+ const cx=anchor.x+anchor.w/2,cy=anchor.y+anchor.h/2;
+ const maxW=2*Math.min(cx-bounds.x,bounds.x+bounds.w-cx),maxH=2*Math.min(cy-bounds.y,bounds.y+bounds.h-cy);
+ let w=Math.sqrt(anchor.w*anchor.h*ratio),h=w/ratio;
+ const scale=Math.min(1,maxW/w,maxH/h);w*=scale;h*=scale;
+ return {x:cx-w/2,y:cy-h/2,w,h};
+}
+module.exports={full,dimensions,drawCrop,constrain,normalized,resize,rotateSelection,ratioBox};

@@ -202,3 +202,24 @@ test('detection JPEG uses reduced quality and reports only dimensions and byte c
   assert.deepEqual(logs.find(row=>row[0]==='contentSafety: detection_image')[1],{width:512,height:384,bytes:4,quality:.7});
  }finally{console.info=original;}
 });
+
+test('poll transport failure resumes existing job without uploading again',async()=>{
+ let submissions=0,polls=0;
+ global.wx={getStorageSync:()=>true,showLoading(){},hideLoading(){},cloud:{callFunction:async({data})=>{
+  if(data.kind==='image'){submissions++;return {result:{status:'pending',id:'retry-job'}};}
+  if(++polls===1)throw {errCode:'network'};
+  return {result:{status:'pass'}};
+ }}};
+ await assert.rejects(safety.checkPreparedImage(image.base64,{scope:'transport-retry'}),e=>e.safety==='unavailable');
+ await safety.checkPreparedImage(image.base64,{scope:'transport-retry'});
+ assert.equal(submissions,1);assert.equal(polls,2);
+});
+test('submission failure can submit again on next user retry',async()=>{
+ let submissions=0;
+ global.wx={getStorageSync:()=>true,showLoading(){},hideLoading(){},cloud:{callFunction:async({data})=>{
+  if(data.kind==='image'){if(++submissions===1)throw {errCode:'network'};return {result:{status:'pending',id:'retry-submission'}};}
+  return {result:{status:'pass'}};
+ }}};
+ await assert.rejects(safety.checkPreparedImage(image.base64,{scope:'submission-retry'}));
+ await safety.checkPreparedImage(image.base64,{scope:'submission-retry'});assert.equal(submissions,2);
+});

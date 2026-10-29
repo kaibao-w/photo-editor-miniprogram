@@ -15,6 +15,7 @@ module.exports={
   const w=this._cropPhoto.width,h=this._cropPhoto.height,s=Math.min((this.rect.width-36)/w,(this.rect.height-36)/h);
   this.cropView={scale:s,x:(this.rect.width-w*s)/2,y:(this.rect.height-h*s)/2};
   const c=this.cropDraft;this.cropBox={x:this.cropView.x+c.x*w*s,y:this.cropView.y+c.y*h*s,w:c.w*w*s,h:c.h*h*s};
+  this._cropRatioAnchor={...this.cropBox};
   this.drawCropView();
  },
  drawCropView(){
@@ -32,10 +33,20 @@ module.exports={
   const ratios={free:0,original:this._cropPhoto.width/this._cropPhoto.height,square:1,portrait:3/4,landscape:4/3,story:9/16,wide:16/9};
   const ratio=ratios[key];if(ratio===undefined)return;
   this._cropRatio=ratio;this.setData({cropRatio:key});
-  if(ratio){const b=this.cropBox,center={x:b.x+b.w/2,y:b.y+b.h/2};let w=b.w,h=w/ratio;if(h>b.h){h=b.h;w=h*ratio;}this.cropBox={x:center.x-w/2,y:center.y-h/2,w,h};}
+  const v=this.cropView;
+  const bounds={x:Math.max(0,v.x),y:Math.max(0,v.y),w:Math.min(this.rect.width,v.x+this._cropPhoto.width*v.scale)-Math.max(0,v.x),h:Math.min(this.rect.height,v.y+this._cropPhoto.height*v.scale)-Math.max(0,v.y)};
+  this.cropBox=crop.ratioBox(this._cropRatioAnchor||this.cropBox,ratio,bounds);
   this.drawCropView();
  },
- cropRotate(){if(!this.cropDraft)return;this.cropDraft={...crop.full(),rotation:(this.cropDraft.rotation+1)%4};this._cropRatio=0;this.setData({cropRatio:'free'});this.prepareCropView();},
+ cropRotate(){
+  if(!this.cropDraft)return;
+  const selected=crop.normalized(this.cropBox,this.cropView,this._cropPhoto.width,this._cropPhoto.height,this.cropDraft.rotation);
+  this.cropDraft=crop.rotateSelection(selected);
+  const inverse={portrait:'landscape',landscape:'portrait',story:'wide',wide:'story'};
+  const key=inverse[this.data.cropRatio]||this.data.cropRatio;
+  this._cropRatio=this._cropRatio?1/this._cropRatio:0;
+  this.setData({cropRatio:key});this._cropGesture=null;this.prepareCropView();
+ },
  cropReset(){this.cropDraft=crop.full();this._cropRatio=0;this.setData({cropRatio:'free'});this.prepareCropView();},
  cropTouchStart(e){
   const t=e.touches;if(!t.length)return;const point=a=>({x:a.x===undefined?a.clientX-this.rect.left:a.x,y:a.y===undefined?a.clientY-this.rect.top:a.y});
@@ -53,7 +64,7 @@ module.exports={
   else this.cropView={...g.view,x:g.view.x+a.x-g.a.x,y:g.view.y+a.y-g.a.y};
   this.cropView=crop.constrain(this.cropView,this.cropBox,this._cropPhoto.width,this._cropPhoto.height);this.drawCropView();
  },
- cropTouchEnd(e){this._cropGesture=null;if(e.touches&&e.touches.length)this.cropTouchStart(e);},
+ cropTouchEnd(e){this._cropRatioAnchor={...this.cropBox};this._cropGesture=null;if(e.touches&&e.touches.length)this.cropTouchStart(e);},
  cancelCrop(){if(!this.data.cropping)return;this.cropDraft=null;this._cropGesture=null;this.setData({cropping:false,tab:this._cropReturn||'presets'});this.render();},
  applyCrop(){
   if(!this.cropDraft||this.data.busy)return;

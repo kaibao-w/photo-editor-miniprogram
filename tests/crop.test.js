@@ -16,3 +16,17 @@ test('crop draws from full original with rotation and output scaling',()=>{
  const image={width:4000,height:3000};drawCrop(ctx,image,{...full(),x:.25,y:.1,w:.5,h:.5,rotation:1},1500,2000);
  assert.deepEqual(ops[0],['scale',1,1]);assert.deepEqual(ops[1],['translate',-750,-400]);assert.deepEqual(ops[2],['translate',3000,0]);assert.equal(ops.at(-1)[1],image);
 });
+
+test('ratio switching uses a stable anchor, not the last shrunken rectangle',()=>{
+ const {ratioBox}=require('../miniprogram/utils/crop');
+ const anchor={x:50,y:50,w:200,h:200},bounds={x:0,y:0,w:300,h:400};
+ const portrait=ratioBox(anchor,9/16,bounds),square=ratioBox(anchor,1,bounds);
+ assert.deepEqual(square,anchor);assert(Math.abs(portrait.w/portrait.h-9/16)<1e-10);
+ assert.equal(portrait.x+portrait.w/2,150);assert.equal(portrait.y+portrait.h/2,150);
+});
+test('four rotations preserve the selection rather than resetting to full image',()=>{
+ const {rotateSelection}=require('../miniprogram/utils/crop');const start={x:.1,y:.2,w:.4,h:.5,rotation:0};
+ let c=start;for(let i=0;i<4;i++)c=rotateSelection(c);
+ for(const key of Object.keys(start))assert(Math.abs(c[key]-start[key])<1e-10);
+ assert.deepEqual(rotateSelection({x:.25,y:.25,w:.5,h:.25,rotation:0}),{x:.5,y:.25,w:.25,h:.5,rotation:1});
+});

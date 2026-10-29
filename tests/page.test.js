@@ -185,10 +185,23 @@ test('opening and returning to the page lists presets without moderation or load
  p.onShow();assert.deepEqual(p.data.savedPresets,[row]);
 });
 
-test('saving unfinished original never starts another moderation request',async()=>{
- const p=page();p.ensurePhotoApproved=definition.ensurePhotoApproved;p._photoCheck={passUntil:0};
- p.startPhotoCheck=()=>assert.fail('must not submit');
- await assert.rejects(p.ensurePhotoApproved(),e=>e.safety==='pending');
+test('saving after a recoverable detection error retries without resetting edits',async()=>{
+ const api=require('../miniprogram/utils/content-safety'),original=api.checkPreparedImage;
+ const p=page();p.source={};p.values.exposure=.75;p.crop={x:0,y:0,w:.5,h:.5,rotation:1};
+ p.ensurePhotoApproved=definition.ensurePhotoApproved;p.startPhotoCheck=definition.startPhotoCheck;
+ p._photoCheck={prepared:'retry',passUntil:0,error:api.failure('pending')};
+ let resolve,calls=0;api.checkPreparedImage=()=>{calls++;return new Promise(r=>resolve=r);};
+ global.wx={showLoading(){},hideLoading(){}};
+ const before=p.state();
+ try{
+  const a=p.ensurePhotoApproved(),b=p.ensurePhotoApproved();assert.equal(calls,1);
+  resolve(Date.now()+600000);await Promise.all([a,b]);assert.deepEqual(p.state(),before);assert.equal(p.history.items.length,1);assert.equal(p.data.photoCheckStatus,'pass');
+ }finally{api.checkPreparedImage=original;}
+});
+test('explicitly blocked photo is never retried',async()=>{
+ const p=page();p.ensurePhotoApproved=definition.ensurePhotoApproved;p._photoCheck={passUntil:0,error:{safety:'blocked'}};
+ p.startPhotoCheck=()=>assert.fail('must not retry blocked content');
+ await assert.rejects(p.ensurePhotoApproved(),e=>e.safety==='blocked');
 });
 
 test('caption checks silently and rolls back with toast on rejection',async()=>{
@@ -355,4 +368,16 @@ test('step selection updates the next-step button and restores later adjustments
  p.gotoStep({currentTarget:{dataset:{index:1}}});assert.equal(p.data.canRedo,true);assert.equal(p.values.exposure,.2);
  p.redo();assert.equal(p.values.exposure,.4);assert.equal(p.data.canRedo,true);
  p.redo();assert.equal(p.values.exposure,.6);assert.equal(p.data.canRedo,false);
+});
+
+test('crop ratio round trip does not progressively shrink the selection',()=>{
+ const p=page();p.cropDraft={rotation:0};p._cropPhoto={width:400,height:300};p.cropView={x:0,y:0,scale:1};p.cropBox={x:100,y:50,w:200,h:200};p._cropRatioAnchor={...p.cropBox};p.rect={width:400,height:300};p.drawCropView=()=>{};
+ const original={...p.cropBox};
+ for(let i=0;i<4;i++){p.cropRatioChange({currentTarget:{dataset:{key:'story'}}});p.cropRatioChange({currentTarget:{dataset:{key:'square'}}});}
+ assert.deepEqual(p.cropBox,original);
+});
+test('crop rotation retains subject and swaps the selected fixed ratio',()=>{
+ const p=page();p.cropDraft={rotation:0};p._cropPhoto={width:400,height:300};p.cropView={x:0,y:0,scale:1};p.cropBox={x:40,y:60,w:90,h:120};p._cropRatio=.75;p.data.cropRatio='portrait';p.prepareCropView=()=>{};
+ p.cropRotate();assert.equal(p.cropDraft.rotation,1);assert.equal(p.data.cropRatio,'landscape');assert.equal(p._cropRatio,4/3);
+ assert(Math.abs(p.cropDraft.x-.4)<1e-10);assert.equal(p.cropDraft.y,.1);assert.equal(p.cropDraft.w,.4);assert.equal(p.cropDraft.h,.225);
 });

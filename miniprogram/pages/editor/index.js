@@ -1,3 +1,4 @@
+const PreviewMetrics=require('../../utils/preview-metrics');
 const cropTools=require('../../utils/crop');
 const cropEditor=require('../../utils/crop-editor');
 const {GPUPreview}=require('../../utils/gpu-preview');
@@ -112,6 +113,7 @@ const editor = {
   },
   startPhotoCheck(record){
     if(record.promise)return record.promise;
+    if(record.error&&record.error.safety==='blocked')return Promise.resolve(false);
     if(!this._alive||this._photoCheck!==record)return Promise.resolve(false);
     this.setData({photoCheckStatus:'pending'});
     record.promise=(async()=>{
@@ -125,7 +127,8 @@ const editor = {
         record.error=error;record.passUntil=0;
         if(error.safety==='blocked'){
           this.source=this.image=this.history=this._dragSource=this._dragSourceOwner=this._previewPixels=null;this.slider=this.gesture=null;this._captionDraft=undefined;
-          this.setData({ready:false,photoCheckStatus:'blocked',history:[],canUndo:false,canRedo:false,comparing:false});this.drawView();
+          this.cropDraft=null;this._cropGesture=null;
+          this.setData({cropping:false,tab:this.data.tab==='crop'?'presets':this.data.tab,ready:false,photoCheckStatus:'blocked',history:[],canUndo:false,canRedo:false,comparing:false});this.drawView();
           if(!this.data.exporting)this.error(error);
         }else if(error.safety!=='cancel')this.setData({photoCheckStatus:'retry'});
         return false;
@@ -137,10 +140,11 @@ const editor = {
     const record=this._photoCheck;
     if(!record)throw contentSafety.failure('unavailable');
     if(record.passUntil>0)return;
-    if(!record.promise)throw record.error||contentSafety.failure('pending');
+    if(record.error&&record.error.safety==='blocked')throw record.error;
+    const pending=record.promise||this.startPhotoCheck(record);
     const finish=loading.begin('安全检测中');
     try{
-      const passed=await record.promise;
+      const passed=await pending;
       if(!this._alive||this._photoCheck!==record)throw contentSafety.failure('cancel');
       if(!passed)throw record.error||contentSafety.failure('unavailable');
     }finally{finish();}
@@ -235,7 +239,7 @@ const editor = {
   schedule() {
     // Coalesce updates without postponing the pending preview during continuous dragging.
     if(this._timer != null || !this._alive)return;
-    this._timer=setTimeout(()=>{this._timer=null;if(this._alive){if(this._sliderSync){this._sliderSync=false;if(this.slider&&this.slider.native){const g=this.slider;this.setData({parameterValue:(g.frame?this.frame:this.values)[g.key]});}else this.sync();}const started=Date.now();this.render();this._renderMs=Date.now()-started;}},this.slider&&this.slider.native?Math.max(8,(this._gpu?16:33)-(this._renderMs||0)):16);
+    this._timer=setTimeout(()=>{this._timer=null;if(this._alive){if(this._sliderSync){this._sliderSync=false;if(this.slider&&this.slider.native){const g=this.slider;this.setData({parameterValue:(g.frame?this.frame:this.values)[g.key]});}else this.sync();}const started=Date.now();this.render();this._renderMs=Date.now()-started;if(this._previewMetrics&&this.slider)this._previewMetrics.add(started,started+this._renderMs);}},this.slider&&this.slider.native?Math.max(8,(this._gpu?16:33)-(this._renderMs||0)):16);
   },
   previewSource() {
     const limit=this._dragLimit||600;
@@ -326,9 +330,16 @@ const editor = {
     })();
     return this._captionPromise;
   },
+  setPreviewDiagnostics(enabled){this._previewDiagnostics=!!enabled;this._previewMetrics=null;},
+  finishPreviewDiagnostics(){
+    if(!this._previewMetrics)return;
+    const summary=this._previewMetrics.summary();this._previewMetrics=null;
+    if(summary)console.info('preview: performance',{...summary,renderer:this._gpu?'gpu':'cpu',width:this.source&&this.source.width,height:this.source&&this.source.height,frame:!!this.frame.enabled,gpu:this._gpu?{...this._gpu.stats}:null});
+  },
   nativeSliderChanging(e){
     if(!this.source || this.data.busy)return;
     if(!this.slider){
+      if(this._previewDiagnostics)this._previewMetrics=new PreviewMetrics();
       const frame=this.data.tab==='frame',key=frame?this.data.frameSelected:this.data.selected;
       const def=(frame?this.data.frameList:this.data.adjustList).find(d=>d.key===key);
       this.slider={native:true,frame,key,def,start:(frame?this.frame:this.values)[key],axis:'horizontal'};
@@ -344,7 +355,7 @@ const editor = {
   nativeSliderChange(e){
     this.nativeSliderChanging(e);
     const g=this.slider;if(!g||!g.native)return;
-    this.slider=null;this._sliderSync=false;
+    this.finishPreviewDiagnostics();this.slider=null;this._sliderSync=false;
     clearTimeout(this._timer);this._timer=null;
     this.sync();
     if((g.frame?this.frame:this.values)[g.key]!==g.start)this.commit(g.def.label+'调整');
@@ -365,7 +376,7 @@ const editor = {
     if(this.data.comparing)this.setData({comparing:false});this._sliderSync=true;this.schedule();
   },
   sliderEnd(){const g=this.slider;this.slider=null;if(g && g.axis==='horizontal'){this._sliderSync=false;this.sync();this.commit(g.def.label+'调整');this.schedule();}},
-  sliderCancel(){if(this.slider){(this.slider.frame?this.frame:this.values)[this.slider.key]=this.slider.start;this.slider=null;this.edit();}},
+  sliderCancel(){this.finishPreviewDiagnostics();if(this.slider){(this.slider.frame?this.frame:this.values)[this.slider.key]=this.slider.start;this.slider=null;this.edit();}},
   restore(state){if(!state)return;const changed=JSON.stringify(this.crop||null)!==JSON.stringify(state.crop||null);this.crop=state.crop||null;if(changed)this.rebuildCrop();this.values=state.values;this.frame=state.frame;this.edit();this.syncHistory();},
   undo(){if(!this.data.busy&&this.history)this.restore(this.history.undo());},
   redo(){if(!this.data.busy&&this.history)this.restore(this.history.redo());},
